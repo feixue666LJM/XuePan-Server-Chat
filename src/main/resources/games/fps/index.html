@@ -1,0 +1,71 @@
+  <section id="fpsScreen" class="screen entry-screen fps-screen" aria-labelledby="fpsTitle" hidden>
+    <div id="fpsStage" class="fps-stage"></div>
+    <div id="fpsMenu" class="fps-overlay">
+      <h1 id="fpsTitle">🔫 3D 射击生存</h1>
+      <p class="fps-sub">WASD 移动 · 空格 跳跃 · F 下蹲 · R 换弹 · C 近战 · Z 切换武器 · 鼠标左键连发开火 · ESC 退出<br>
+      单人：对抗无限刷新的近战机器人生存得分；多人：房主按 J 开关机器人刷新</p>
+      <p class="fps-stat">历史最高战绩：<strong id="fpsBestScore">0</strong> 分</p>
+      <button id="fpsStartButton" class="primary wide" type="button">🎮 单人模式</button>
+      <button id="fpsMpButton" class="secondary wide" type="button">🌐 多人模式</button>
+      <button id="fpsBackButton" class="secondary wide" type="button">返回游戏列表</button>
+    </div>
+    <div id="fpsMpPanel" class="fps-overlay" hidden>
+      <h1>🌐 多人模式</h1>
+      <div class="fps-mp-create">
+        <h3>创建服务器（2~16 人）</h3>
+        <div class="fps-mp-row"><span>人数</span><input id="fpsMpMax" type="number" min="2" max="16" value="8"></div>
+        <div class="fps-mp-row"><span>密码（可留空）</span><input id="fpsMpCreatePass" type="password" maxlength="16" autocomplete="new-password"></div>
+        <button id="fpsMpCreateButton" class="primary wide" type="button">创建并进入</button>
+      </div>
+      <div class="fps-mp-list">
+        <div class="section-title-row"><h3>在线服务器</h3><button id="fpsMpRefreshButton" class="secondary" type="button">刷新</button></div>
+        <div id="fpsMpServers" class="fps-mp-servers"><div class="earth-info-empty">加载中...</div></div>
+      </div>
+      <button id="fpsMpBackButton" class="secondary wide" type="button">返回</button>
+    </div>
+    <div id="fpsHud" class="fps-hud" hidden>
+      <div class="fps-crosshair"></div>
+      <div class="fps-hud-top">
+        <span class="hp">❤ <strong id="fpsHp">150</strong></span>
+        <span class="ammo">🔫 <strong id="fpsAmmo">40</strong> / <span id="fpsReserve">300</span></span>
+        <span class="score" id="fpsScoreWrap">🏆 <strong id="fpsScore">0</strong></span>
+        <span id="fpsWeaponInfo" class="fps-weapon-info"></span>
+        <span id="fpsMpInfo" class="fps-mp-info"></span>
+        <span id="fpsSelfId" class="fps-self-id" hidden></span>
+      </div>
+      <div id="fpsRespawnOverlay" class="fps-respawn" hidden></div>
+      <div id="fpsDamageFlash" class="fps-damage-flash" hidden></div>
+      <div id="fpsTouchControls" class="fps-touch" hidden>
+        <button id="tBtnExit" class="tbtn exit" type="button" aria-label="退出游戏">✕</button>
+        <div class="fps-touch-left">
+          <button id="tBtnW" class="tbtn" type="button">W</button>
+          <button id="tBtnA" class="tbtn" type="button">A</button>
+          <button id="tBtnS" class="tbtn" type="button">S</button>
+          <button id="tBtnD" class="tbtn" type="button">D</button>
+          <button id="tBtnSpace" class="tbtn" type="button">跳</button>
+        </div>
+        <div class="fps-touch-right">
+          <button id="tBtnZ" class="tbtn" type="button" title="切换武器">Z</button>
+          <button id="tBtnG" class="tbtn" type="button" title="切换 M249">G</button>
+          <button id="tBtnX" class="tbtn" type="button" title="切换 DDR-600">X</button>
+          <button id="tBtnJ" class="tbtn" type="button" title="房主开关机器人">J</button>
+          <button id="tBtnF" class="tbtn" type="button" title="下蹲">F</button>
+          <button id="tBtnFire" class="tbtn fire" type="button">发射</button>
+        </div>
+      </div>
+    </div>
+    <div id="fpsSettle" class="fps-overlay" hidden>
+      <h1>游戏结束</h1>
+      <p class="fps-stat">本次得分：<strong id="fpsSettleScore">0</strong></p>
+      <p class="fps-stat">历史最高分：<strong id="fpsSettleBest">0</strong></p>
+      <p class="fps-rank">当前排名：<strong id="fpsSettleRank">--</strong></p>
+      <button id="fpsSettleBackButton" class="primary wide" type="button">返回开始界面</button>
+    </div>
+    <div id="fpsPause" class="fps-overlay" hidden>
+      <h1>⏸ 游戏已暂停</h1>
+      <p class="fps-sub">检测到鼠标手势或按键导致指针锁定中断，游戏已暂停<br>点击「继续游戏」回到战斗，或按 ESC / 点击「退出游戏」结束本局</p>
+      <button id="fpsResumeButton" class="primary wide" type="button">继续游戏</button>
+      <button id="fpsPauseExitButton" class="secondary wide" type="button">退出游戏</button>
+    </div>
+  </section>
+

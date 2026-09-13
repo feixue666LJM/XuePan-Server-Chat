@@ -1,0 +1,41 @@
+  <section id="earthScreen" class="screen entry-screen game-screen" aria-labelledby="earthTitle" hidden>
+    <main class="earth-panel">
+      <aside class="earth-controls" aria-label="模拟地球控制">
+        <div>
+          <h1 id="earthTitle">模拟地球</h1>
+          <div class="subtle">3D 地球 · 点击大洲或城市查看人口</div>
+        </div>
+        <div>
+          <h3>上帝系统</h3>
+          <div class="earth-mode-buttons">
+            <button id="earthModeNone" class="secondary active" type="button">👁 观察</button>
+            <button id="earthModeRain" class="secondary" type="button">🌧 下雨</button>
+            <button id="earthModeSnow" class="secondary" type="button">❄ 下雪</button>
+            <button id="earthModeMeteor" class="secondary" type="button">☄ 陨石</button>
+            <button id="earthModeConflict" class="secondary full" type="button">⚔ 冲突（选两个大洲开战）</button>
+          </div>
+          <p id="earthModeTip" class="earth-mode-tip">拖拽旋转地球，点击大洲或城市查看人口</p>
+          <div id="earthConflicts" class="earth-conflicts" hidden></div>
+        </div>
+        <div>
+          <h3>视角</h3>
+          <div class="earth-zoom-row">
+            <span class="subtle">远</span>
+            <input id="earthZoom" type="range" min="0" max="100" value="0" aria-label="缩放视角">
+            <span class="subtle">近</span>
+          </div>
+        </div>
+        <div>
+          <h3>信息</h3>
+          <div id="earthInfo" class="earth-info">
+            <div class="earth-info-empty">点击大洲或城市查看信息</div>
+          </div>
+        </div>
+        <button id="earthBackButton" class="secondary wide" type="button">返回游戏列表</button>
+      </aside>
+      <div id="earthStage" class="earth-stage">
+        <button id="earthStageBack" class="earth-stage-back" type="button">← 返回游戏</button>
+      </div>
+    </main>
+  </section>
+

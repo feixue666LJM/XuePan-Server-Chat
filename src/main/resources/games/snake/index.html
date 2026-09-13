@@ -1,0 +1,28 @@
+  <section id="snakeScreen" class="screen entry-screen game-screen" aria-labelledby="snakeTitle" hidden>
+    <main class="game-panel">
+      <aside class="rank-panel" aria-label="贪吃蛇排行榜">
+        <div class="rank-panel-header">🏆 贪吃蛇 · 前百排名</div>
+        <div id="snakeRankList" class="rank-list"><div class="rank-empty">正在加载排行榜...</div></div>
+      </aside>
+      <header class="game-head">
+        <div>
+          <h1 id="snakeTitle">贪吃蛇</h1>
+          <div class="subtle">35 × 35 经典模式 · 方向键 / WASD / 滑动控制</div>
+        </div>
+        <div class="game-hud">
+          <span class="game-score">得分 <strong id="snakeScore">0</strong></span>
+          <span id="snakeStatus" class="game-status">按方向键开始</span>
+        </div>
+        <button id="snakeBackButton" class="secondary" type="button">返回游戏列表</button>
+      </header>
+      <div class="game-stage">
+        <canvas id="snakeCanvas" width="700" height="700" aria-label="贪吃蛇游戏画面"></canvas>
+        <div id="snakeOverlay" class="game-overlay" hidden>
+          <strong id="snakeOverlayTitle">游戏结束</strong>
+          <span id="snakeOverlayScore">得分：0</span>
+          <button id="snakeRestartButton" class="primary" type="button">再来一局</button>
+        </div>
+      </div>
+    </main>
+  </section>
+

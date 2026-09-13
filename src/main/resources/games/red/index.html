@@ -1,0 +1,29 @@
+  <section id="clickScreen" class="screen entry-screen game-screen" aria-labelledby="clickTitle" hidden>
+    <main class="game-panel">
+      <aside class="rank-panel" aria-label="点格子排行榜">
+        <div class="rank-panel-header">🏆 点格子 · 前百排名</div>
+        <div id="clickRankList" class="rank-list"><div class="rank-empty">正在加载排行榜...</div></div>
+      </aside>
+      <header class="game-head">
+        <div>
+          <h1 id="clickTitle">点格子</h1>
+          <div class="subtle">20 × 20 · 每 0.5 秒出一个红格，3 秒内没点中就结束</div>
+        </div>
+        <div class="game-hud">
+          <span class="game-score">得分 <strong id="clickScore">0</strong></span>
+          <span id="clickStatus" class="game-status">准备中</span>
+        </div>
+        <button id="clickBackButton" class="secondary" type="button">返回游戏列表</button>
+      </header>
+      <div class="game-stage">
+        <canvas id="clickCanvas" width="700" height="700" aria-label="点格子游戏画面"></canvas>
+        <div id="clickOverlay" class="game-overlay" hidden>
+          <strong id="clickOverlayTitle">点格子</strong>
+          <span id="clickOverlayScore">得分：0</span>
+          <button id="clickStartButton" class="primary" type="button">开始游戏</button>
+          <button id="clickRestartButton" class="primary" type="button" hidden>再来一局</button>
+        </div>
+      </div>
+    </main>
+  </section>
+
