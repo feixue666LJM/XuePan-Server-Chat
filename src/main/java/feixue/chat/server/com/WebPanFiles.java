@@ -31,6 +31,9 @@ import java.util.Map;
 import java.util.Set;
 
 final class WebPanFiles {
+    interface DownloadGate {
+        WebPanService.DownloadAdmission tryAcquire(HttpExchange exchange, Path file);
+    }
 
     /* ======================= 默认配置 ======================= */
 
@@ -84,7 +87,7 @@ final class WebPanFiles {
 
     /* ======================= 请求分发 ======================= */
 
-    static void handle(HttpExchange ex, Path root, String authHeader) {
+    static void handle(HttpExchange ex, Path root, DownloadGate downloadGate) {
         long t0 = System.nanoTime();
         int code = 200;
         String client = "-";
@@ -104,14 +107,6 @@ final class WebPanFiles {
                 code = 405; sendText(ex, 405, "405 只支持 GET / HEAD", head); return;
             }
 
-            if (authHeader != null) {
-                String got = ex.getRequestHeaders().getFirst("Authorization");
-                if (!authMatches(got, authHeader)) {
-                    ex.getResponseHeaders().set("WWW-Authenticate", "Basic realm=\"webpan\"");
-                    code = 401; sendText(ex, 401, "401 需要登录", head); return;
-                }
-            }
-
             URI uri = ex.getRequestURI();
             String rawPath = uri.getRawPath() == null ? "/" : uri.getRawPath();
             String path = decodeUrlPath(rawPath);
@@ -128,7 +123,7 @@ final class WebPanFiles {
                 String dirUrl = path.endsWith("/") ? path : path + "/";
                 listDir(ex, target, dirUrl, root, head, q);
             } else if (Files.isRegularFile(target)) {
-                serveFile(ex, target, path, head, q);
+                serveFile(ex, target, path, head, q, downloadGate);
             } else {
                 code = 404; sendText(ex, 404, "404 未找到: " + path, head);
             }
@@ -156,15 +151,6 @@ final class WebPanFiles {
 
     static String safeUri(HttpExchange ex) {
         try { return ex.getRequestURI().toString(); } catch (Exception e) { return "-"; }
-    }
-
-    /** Basic 认证比较：方案名 "Basic" 大小写不敏感，凭据部分严格比较 */
-    static boolean authMatches(String got, String want) {
-        if (got == null) return false;
-        got = got.trim();
-        if (got.length() != want.length()) return false;
-        return got.regionMatches(true, 0, want, 0, 5)
-            && got.regionMatches(false, 5, want, 5, want.length() - 5);
     }
 
     /* ======================= 路径安全 ======================= */
@@ -298,7 +284,7 @@ final class WebPanFiles {
     /* ======================= 文件响应 ======================= */
 
     static void serveFile(HttpExchange ex, Path f, String path, boolean head,
-                          Map<String, String> q) throws IOException {
+                          Map<String, String> q, DownloadGate downloadGate) throws IOException {
         String name = f.getFileName().toString();
         String ext = extOf(name);
         long len = Files.size(f);
@@ -306,7 +292,7 @@ final class WebPanFiles {
         boolean preview = !forceDownload && PREVIEW_EXT.contains(ext) && len <= PREVIEW_MAX;
 
         if (preview) servePreview(ex, f, path, name, len, head);
-        else serveDownload(ex, f, name, len, head);
+        else serveDownload(ex, f, name, len, head, downloadGate);
     }
 
     /** 文本预览：转义后放进 <pre>，并用 CSP 防止文件内容里的脚本被执行 */
@@ -340,7 +326,8 @@ final class WebPanFiles {
     }
 
     /** 下载：application/octet-stream + attachment，支持 Range 断点续传 */
-    static void serveDownload(HttpExchange ex, Path f, String name, long len, boolean head) throws IOException {
+    static void serveDownload(HttpExchange ex, Path f, String name, long len, boolean head,
+                              DownloadGate downloadGate) throws IOException {
         Headers h = ex.getResponseHeaders();
         h.set("Content-Type", "application/octet-stream");
         h.set("Content-Disposition", contentDisposition(name));
@@ -359,26 +346,59 @@ final class WebPanFiles {
             h.set("Content-Range", "bytes " + start + "-" + end + "/" + len);
             h.set("Content-Length", String.valueOf(count));
             if (head) { ex.sendResponseHeaders(206, -1); return; }
-            ex.sendResponseHeaders(206, count);
-            try (InputStream in = Files.newInputStream(f); OutputStream os = ex.getResponseBody()) {
-                skipFully(in, start);
-                copy(in, os, count);
-            }
+            streamDownload(ex, f, start, count, 206, downloadGate);
             return;
         }
 
-        if (len == 0) {
-            if (head) { ex.sendResponseHeaders(200, -1); return; }
-            ex.sendResponseHeaders(200, 0);
-            try (OutputStream os = ex.getResponseBody()) { os.flush(); }
-            return;
-        }
         h.set("Content-Length", String.valueOf(len));
         if (head) { ex.sendResponseHeaders(200, -1); return; }
-        ex.sendResponseHeaders(200, len);
-        try (InputStream in = Files.newInputStream(f); OutputStream os = ex.getResponseBody()) {
-            copy(in, os, len);
+        streamDownload(ex, f, 0, len, 200, downloadGate);
+    }
+
+    private static void streamDownload(HttpExchange ex, Path file, long start, long count, int status,
+                                       DownloadGate downloadGate) throws IOException {
+        WebPanService.DownloadAdmission admission = downloadGate == null ? null : downloadGate.tryAcquire(ex, file);
+        if (admission != null && !admission.isAllowed()) {
+            try {
+                // A captcha/error response must not inherit attachment/range headers from the file response.
+                clearDownloadHeaders(ex.getResponseHeaders());
+                if (admission.getRetryAfterSeconds() > 0) {
+                    ex.getResponseHeaders().set("Retry-After", String.valueOf(admission.getRetryAfterSeconds()));
+                }
+                if (admission.getRejectionStatus() == 303) {
+                    ex.getResponseHeaders().set("Content-Length", "0");
+                    ex.getResponseHeaders().set("Location", admission.getMessage());
+                    ex.sendResponseHeaders(303, -1);
+                } else if (admission.isHtml()) {
+                    sendHtml(ex, admission.getRejectionStatus(), admission.getMessage(), false);
+                } else {
+                    sendText(ex, admission.getRejectionStatus(), admission.getMessage(), false);
+                }
+            } finally {
+                admission.afterResponse();
+            }
+            return;
         }
+        try {
+            ex.sendResponseHeaders(status, count);
+            if (count == 0) {
+                try (OutputStream os = ex.getResponseBody()) { os.flush(); }
+                return;
+            }
+            try (InputStream in = Files.newInputStream(file); OutputStream os = ex.getResponseBody()) {
+                skipFully(in, start);
+                copy(in, os, count);
+            }
+        } finally {
+            if (admission != null) admission.close();
+        }
+    }
+
+    private static void clearDownloadHeaders(Headers headers) {
+        headers.remove("Content-Disposition");
+        headers.remove("Accept-Ranges");
+        headers.remove("Content-Range");
+        headers.remove("Content-Length");
     }
 
     /* ======================= 工具方法 ======================= */
@@ -388,7 +408,7 @@ final class WebPanFiles {
         Headers h = ex.getResponseHeaders();
         h.set("Content-Type", "text/html; charset=utf-8");
         h.set("X-Content-Type-Options", "nosniff");
-        h.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'");
+        h.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'");
         h.set("Content-Length", String.valueOf(out.length));
         if (head) { ex.sendResponseHeaders(code, -1); return; }
         ex.sendResponseHeaders(code, out.length);

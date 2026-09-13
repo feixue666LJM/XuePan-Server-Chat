@@ -315,6 +315,23 @@ class UserManager {
         }
     }
 
+    // A web-pan captcha failure applies to every connection using the same user ID.
+    void disconnectAllConnectionsForUser(String username) {
+        if (username == null || username.isEmpty()) return;
+        int disconnected = 0;
+        for (ClientHandler handler : new ArrayList<>(server.allClientHandlers)) {
+            if (!username.equals(handler.getNickname()) && !username.equals(handler.getWebUserId())) continue;
+            try {
+                handler.sendMessage("下载验证失败，您已被服务器强制踢出");
+                handler.closeConnection();
+            } catch (IOException ignored) {
+                try { handler.socket.close(); } catch (IOException ignoredAgain) { }
+            }
+            disconnected++;
+        }
+        server.log("下载验证失败，已断开用户 " + username + " 的 " + disconnected + " 个连接");
+    }
+
     void muteUser(String username, double hours) {
         long durationMillis = Math.max(1L, Math.round(hours * 60 * 60 * 1000));
         long expiresAt = System.currentTimeMillis() + durationMillis;

@@ -48,6 +48,21 @@ import javax.swing.tree.TreePath;
 class ChatServerUi {
     final ChatServer server;
 
+    // This value is rendered only by the server's Swing management interface.
+    private static final class OnlineUserEntry {
+        final String username;
+        final String ip;
+
+        OnlineUserEntry(String username, String ip) {
+            this.username = username;
+            this.ip = ip;
+        }
+
+        @Override public String toString() {
+            return ip == null || ip.isEmpty() ? username : username + " [" + ip + "]";
+        }
+    }
+
     JTextArea logArea;       // 聊天记录显示区域
     JTextField portField;    // 端口输入框
     JButton startBtn;        // 启动服务器按钮
@@ -76,6 +91,7 @@ class ChatServerUi {
     JLabel webStatusLabel;
     JLabel webClientCountLabel;
     JTextField webPanRootField;
+    JTextField webPanCaptchaDirectoryField;
     JCheckBox webPanEnabledCheckBox;
     JLabel webPanStatusLabel;
     JLabel sslStatusLabel;
@@ -224,7 +240,7 @@ class ChatServerUi {
     JPanel createWebPanPanel() {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
         panel.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
-        JPanel settings = new JPanel(new BorderLayout(8, 8));
+        JPanel settings = new JPanel(new GridLayout(0, 1, 0, 8));
         webPanRootField = new JTextField(server.webPan.getRoot().toString(), 28);
         JPanel directory = new JPanel(new BorderLayout(8, 0));
         directory.add(new JLabel("共享目录："), BorderLayout.WEST);
@@ -238,14 +254,32 @@ class ChatServerUi {
             }
         });
         directory.add(browse, BorderLayout.EAST);
-        settings.add(directory, BorderLayout.NORTH);
+        settings.add(directory);
+        webPanCaptchaDirectoryField = new JTextField(server.webPan.getCaptchaDirectory() == null
+                ? "" : server.webPan.getCaptchaDirectory().toString(), 28);
+        JPanel captchaDirectory = new JPanel(new BorderLayout(8, 0));
+        captchaDirectory.add(new JLabel("验证图片目录："), BorderLayout.WEST);
+        captchaDirectory.add(webPanCaptchaDirectoryField, BorderLayout.CENTER);
+        JButton captchaBrowse = new JButton("选择目录");
+        captchaBrowse.addActionListener(e -> {
+            javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(webPanCaptchaDirectoryField.getText());
+            chooser.setFileSelectionMode(javax.swing.JFileChooser.DIRECTORIES_ONLY);
+            if (chooser.showOpenDialog(server) == javax.swing.JFileChooser.APPROVE_OPTION) {
+                webPanCaptchaDirectoryField.setText(chooser.getSelectedFile().getAbsolutePath());
+            }
+        });
+        captchaDirectory.add(captchaBrowse, BorderLayout.EAST);
+        settings.add(captchaDirectory);
         webPanEnabledCheckBox = new JCheckBox("启用肥雪网盘", server.webPan.isEnabled());
-        settings.add(webPanEnabledCheckBox, BorderLayout.CENTER);
+        settings.add(webPanEnabledCheckBox);
         JButton save = new JButton("保存并应用");
         save.addActionListener(e -> {
             try {
-                server.webPan.configure(webPanRootField.getText(), webPanEnabledCheckBox.isSelected());
+                server.webPan.configure(webPanRootField.getText(), webPanCaptchaDirectoryField.getText(),
+                        webPanEnabledCheckBox.isSelected());
                 webPanRootField.setText(server.webPan.getRoot().toString());
+                webPanCaptchaDirectoryField.setText(server.webPan.getCaptchaDirectory() == null
+                        ? "" : server.webPan.getCaptchaDirectory().toString());
                 server.log("肥雪网盘设置已保存：" + (server.webPan.isEnabled() ? "启用" : "关闭"));
                 refreshWebControlState();
             } catch (IOException | RuntimeException error) {
@@ -259,7 +293,7 @@ class ChatServerUi {
         webPanStatusLabel = new JLabel();
         status.add(webPanStatusLabel);
         status.add(new JLabel("访问地址：https://服务器地址:" + server.sslPort + "/webpan/"));
-        status.add(new JLabel("共享目录仅限网页验证通过后只读访问；关闭网页端将停止网盘服务。"));
+        status.add(new JLabel("下载必须完成图片验证；图片仅支持 .png，答案为文件名（不含后缀，区分大小写）。"));
         JPanel center = new JPanel(new BorderLayout());
         center.add(status, BorderLayout.NORTH);
         panel.add(center, BorderLayout.CENTER);
@@ -754,6 +788,7 @@ class ChatServerUi {
             return null;
         }
         Object userObject = ((DefaultMutableTreeNode) last).getUserObject();
+        if (userObject instanceof OnlineUserEntry) return ((OnlineUserEntry) userObject).username;
         return userObject == null ? null : userObject.toString();
     }
 
@@ -769,7 +804,9 @@ class ChatServerUi {
                 DefaultMutableTreeNode groupNode = new DefaultMutableTreeNode(
                         entry.getKey() + " (" + entry.getValue().size() + ")");
                 for (String username : entry.getValue()) {
-                    groupNode.add(new DefaultMutableTreeNode(username));
+                    ClientHandler handler = server.userManager.findClientHandlerByNickname(username);
+                    groupNode.add(new DefaultMutableTreeNode(new OnlineUserEntry(username,
+                            handler == null ? null : handler.getClientIp())));
                     total++;
                 }
                 onlineUsersRoot.add(groupNode);

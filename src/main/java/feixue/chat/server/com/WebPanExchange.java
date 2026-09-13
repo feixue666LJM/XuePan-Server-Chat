@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -22,16 +23,25 @@ final class WebPanExchange extends HttpExchange {
     private final String method;
     private final URI uri;
     private final OutputStream body;
+    private final InetSocketAddress remoteAddress;
     private final Headers request = new Headers();
     private final Headers response = new Headers();
     private final Map<String, Object> attributes = new HashMap<>();
     private int responseCode = -1;
 
     WebPanExchange(Socket socket, String method, URI uri, Map<String, String> headers) throws IOException {
+        this(socket, method, uri, headers, socket.getInetAddress().getHostAddress());
+    }
+
+    WebPanExchange(Socket socket, String method, URI uri, Map<String, String> headers, String clientIp) throws IOException {
         this.socket = socket;
         this.method = method;
         this.uri = uri;
         this.body = socket.getOutputStream();
+        InetAddress reportedAddress;
+        try { reportedAddress = InetAddress.getByName(clientIp); }
+        catch (Exception ignored) { reportedAddress = socket.getInetAddress(); }
+        this.remoteAddress = new InetSocketAddress(reportedAddress, socket.getPort());
         headers.forEach(request::set);
     }
 
@@ -42,7 +52,7 @@ final class WebPanExchange extends HttpExchange {
     public HttpContext getHttpContext() { return null; }
     public InputStream getRequestBody() { return new ByteArrayInputStream(new byte[0]); }
     public OutputStream getResponseBody() { return body; }
-    public InetSocketAddress getRemoteAddress() { return (InetSocketAddress) socket.getRemoteSocketAddress(); }
+    public InetSocketAddress getRemoteAddress() { return remoteAddress; }
     public InetSocketAddress getLocalAddress() { return (InetSocketAddress) socket.getLocalSocketAddress(); }
     public int getResponseCode() { return responseCode; }
     public String getProtocol() { return "HTTP/1.1"; }
@@ -75,6 +85,7 @@ final class WebPanExchange extends HttpExchange {
             case 404: reason = "Not Found"; break;
             case 405: reason = "Method Not Allowed"; break;
             case 416: reason = "Range Not Satisfiable"; break;
+            case 429: reason = "Too Many Requests"; break;
             case 503: reason = "Service Unavailable"; break;
             default: reason = "Response";
         }

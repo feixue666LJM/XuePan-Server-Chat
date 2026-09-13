@@ -205,6 +205,7 @@ public class ChatServer extends JFrame {
         gameRecordStore = new GameRecordStore(this); // 初始化小游戏战绩记录存储
         fpsLobby = new FpsLobbyManager(this); // 初始化射击生存多人模式大厅
         userManager = new UserManager(this); // 初始化用户管理
+        webPan.setUserDisconnecter(userManager::disconnectAllConnectionsForUser);
         voiceManager = new VoiceManager(this); // 初始化语音管理
         console = new ServerConsole(this); // 初始化服务器控制台
         http = new HttpFrontend(this); // 初始化网页前端

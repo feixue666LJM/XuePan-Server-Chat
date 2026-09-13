@@ -21,6 +21,7 @@ class ClientHandler implements Runnable {
     Socket socket;
     private ClientTransport transport;
     private final boolean webClient;
+    private final String clientIp;
     String clientId;
     String nickname; // 客户端昵称
     String group;    // 客户端所属群组
@@ -36,26 +37,34 @@ class ClientHandler implements Runnable {
     private Thread liveAudioWriterThread;
 
     public ClientHandler(ChatServer server, Socket socket, ClientTransport transport, boolean webClient) {
-        this(server, socket, transport, webClient, null);
+        this(server, socket, transport, webClient, null, null);
     }
 
     ClientHandler(ChatServer server, Socket socket, ClientTransport transport, boolean webClient,
                   WebPanService.Session webSession) {
+        this(server, socket, transport, webClient, webSession, null);
+    }
+
+    ClientHandler(ChatServer server, Socket socket, ClientTransport transport, boolean webClient,
+                  WebPanService.Session webSession, String reportedClientIp) {
         this.server = server;
         this.socket = socket;
         this.transport = transport;
         this.webClient = webClient;
         this.webSession = webSession;
+        this.clientIp = reportedClientIp == null || reportedClientIp.isEmpty()
+                ? socket.getInetAddress().getHostAddress() : reportedClientIp;
         try {
             if (webClient && !server.webAccessEnabled) {
                 transport.close();
                 return;
             }
             socket.setTcpNoDelay(true);
-            // 客户端ID由服务器从套接字生成（IP:端口），仅作为内部连接标识与日志使用，
+            // 客户端ID仅作为内部连接标识与日志使用；网页端经过可信 Cloudflare 节点时，
+            // IP 来自已验证的 CF-Connecting-IP，端口仍用于保证同 IP 的连接键唯一。
             // 不适用用户自定义ID的30字节长度限制（IPv6地址+端口会超过该限制导致误拒绝）。
             // 用户自定义ID（公共频道用户名、昵称）的长度限制在下方对应消息处理中单独校验。
-            this.clientId = socket.getInetAddress().getHostAddress() + ":" + socket.getPort();
+            this.clientId = clientIp + ":" + socket.getPort();
 
             this.nickname = clientId; // 默认使用客户端ID作为昵称
             server.allClientHandlers.add(this);
@@ -150,6 +159,9 @@ class ClientHandler implements Runnable {
                                 server.log("网页客户端 " + clientId + " 请求了无效频道: " + account);
                                 continue;
                             }
+                            // Bind the authenticated account for server-wide captcha kickout,
+                            // even before the browser chooses a chat nickname.
+                            server.webPan.bindUser(webSession, account);
                         }
                         sendMessage("/login_result|success"); // 发送登录成功消息
                         server.log("客户端 " + clientId + " 登录验证成功: " + account);
@@ -190,6 +202,7 @@ class ClientHandler implements Runnable {
                     // 自动设置昵称和群组
                     this.nickname = username;
                     server.clientNicknames.put(clientId, nickname);
+                    server.webPan.bindUser(webSession, nickname);
                     this.group = ChatServer.PUBLIC_CHANNEL_GROUP;
                     server.clientGroups.put(clientId, group);
                     
@@ -275,6 +288,7 @@ class ClientHandler implements Runnable {
                         String oldNickname = nickname;
                         nickname = newNickname;
                         server.clientNicknames.put(clientId, nickname); // 更新昵称映射
+                        server.webPan.bindUser(webSession, nickname);
 
                         // 更新在线用户列表
                         server.userManager.removeOnlineUser(oldNickname);
@@ -1500,6 +1514,14 @@ class ClientHandler implements Runnable {
     // 获取客户端昵称
     public String getNickname() {
         return nickname;
+    }
+
+    String getClientIp() {
+        return clientIp;
+    }
+
+    String getWebUserId() {
+        return webSession == null ? null : webSession.userId;
     }
 
     // 获取客户端群组

@@ -11,6 +11,7 @@ import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.net.InetAddress;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.StandardCharsets;
@@ -43,9 +44,72 @@ class HttpFrontend {
     private static final Pattern FPS_MUSIC_PATH_PATTERN = Pattern.compile(
             "\\\"backgroundMusicPath\\\"\\s*:\\s*\\\"((?:\\\\\\\\.|[^\\\"\\\\])*)\\\"");
     private final ChatServer server;
+    // CF-Connecting-IP is only trusted when the TCP peer is an official Cloudflare proxy.
+    private static final Cidr[] CLOUDFLARE_PROXY_RANGES = new Cidr[] {
+            cidr("173.245.48.0", 20), cidr("103.21.244.0", 22), cidr("103.22.200.0", 22),
+            cidr("103.31.4.0", 22), cidr("141.101.64.0", 18), cidr("108.162.192.0", 18),
+            cidr("190.93.240.0", 20), cidr("188.114.96.0", 20), cidr("197.234.240.0", 22),
+            cidr("198.41.128.0", 17), cidr("162.158.0.0", 15), cidr("104.16.0.0", 13),
+            cidr("104.24.0.0", 14), cidr("172.64.0.0", 13), cidr("131.0.72.0", 22),
+            cidr("2400:cb00::", 32), cidr("2606:4700::", 32), cidr("2803:f800::", 32),
+            cidr("2405:b500::", 32), cidr("2405:8100::", 32), cidr("2a06:98c0::", 29),
+            cidr("2c0f:f248::", 32)
+    };
+
+    private static final class Cidr {
+        final byte[] address;
+        final int prefixLength;
+
+        Cidr(byte[] address, int prefixLength) {
+            this.address = address;
+            this.prefixLength = prefixLength;
+        }
+
+        boolean contains(InetAddress candidate) {
+            byte[] value = candidate.getAddress();
+            if (value.length != address.length) return false;
+            int wholeBytes = prefixLength / 8;
+            int remainingBits = prefixLength % 8;
+            for (int i = 0; i < wholeBytes; i++) if (value[i] != address[i]) return false;
+            if (remainingBits == 0) return true;
+            int mask = 0xff << (8 - remainingBits);
+            return (value[wholeBytes] & mask) == (address[wholeBytes] & mask);
+        }
+    }
+
+    private static Cidr cidr(String address, int prefixLength) {
+        try {
+            return new Cidr(InetAddress.getByName(address).getAddress(), prefixLength);
+        } catch (IOException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     HttpFrontend(ChatServer server) {
         this.server = server;
+    }
+
+    static String resolveClientIp(InetAddress peer, String cfConnectingIp) {
+        String directIp = peer == null ? "" : peer.getHostAddress();
+        if (!isCloudflareProxy(peer) || cfConnectingIp == null) return directIp;
+        String candidate = cfConnectingIp.trim();
+        if (candidate.length() > 45 || candidate.isEmpty()) return directIp;
+        boolean ipv4 = candidate.matches("\\d{1,3}(?:\\.\\d{1,3}){3}");
+        boolean ipv6 = candidate.indexOf(':') >= 0 && candidate.matches("[0-9A-Fa-f:.]+") ;
+        if (!ipv4 && !ipv6) return directIp;
+        try {
+            InetAddress parsed = InetAddress.getByName(candidate);
+            if ((ipv4 && parsed.getAddress().length != 4) || (ipv6 && parsed.getAddress().length != 16)) return directIp;
+            return parsed.getHostAddress();
+        } catch (IOException ignored) {
+            return directIp;
+        }
+    }
+
+    private static boolean isCloudflareProxy(InetAddress peer) {
+        if (peer == null) return false;
+        for (Cidr range : CLOUDFLARE_PROXY_RANGES) if (range.contains(peer)) return true;
+        return false;
     }
 
     SSLServerSocket createSSLServerSocket(int port) throws Exception {
@@ -182,7 +246,8 @@ class HttpFrontend {
             return;
         }
         if ("/webpan".equals(path) || path.startsWith("/webpan/")) {
-            server.webPan.handle(socket, requestParts[0], target, headers);
+            server.webPan.handle(socket, requestParts[0], target, headers,
+                    resolveClientIp(socket.getInetAddress(), headers.get("cf-connecting-ip")));
             return;
         }
         if (!"GET".equals(requestParts[0])) {
@@ -213,7 +278,8 @@ class HttpFrontend {
             output.write(response.getBytes(StandardCharsets.ISO_8859_1));
             output.flush();
             socket.setSoTimeout(0);
-            new ClientHandler(server, socket, new WebSocketTransport(socket, input, output), true, webSession);
+            new ClientHandler(server, socket, new WebSocketTransport(socket, input, output), true, webSession,
+                    resolveClientIp(socket.getInetAddress(), headers.get("cf-connecting-ip")));
             return;
         }
 
