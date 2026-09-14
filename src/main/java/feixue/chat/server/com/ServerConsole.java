@@ -1,5 +1,6 @@
 package feixue.chat.server.com;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -33,6 +34,32 @@ class ServerConsole {
             if (!username.isEmpty()) {
                 server.userManager.unbanUser(username);
                 server.log("服务器: 已解除禁止用户 " + username);
+            }
+        } else if (command.equals("/banip") || command.startsWith("/banip ")) {
+            String ip = command.length() > 6 ? command.substring(6).trim() : "";
+            if (ip.isEmpty()) {
+                server.log("用法: /banip IP地址，例如 /banip 192.168.77.77 或 /banip [8431:6010:2b7:30b2]");
+                return;
+            }
+            try {
+                boolean added = server.ipBanManager.banPermanently(ip);
+                server.log(added ? "服务器: 已永久封禁 IP " + IpBanManager.normalizeIp(ip)
+                        : "服务器: IP 已处于永久封禁状态 " + IpBanManager.normalizeIp(ip));
+            } catch (IOException e) {
+                server.log("IP 封禁失败: " + e.getMessage());
+            }
+        } else if (command.equals("/unbanip") || command.startsWith("/unbanip ")) {
+            String ip = command.length() > 8 ? command.substring(8).trim() : "";
+            if (ip.isEmpty()) {
+                server.log("用法: /unbanip IP地址，例如 /unbanip 192.168.77.77 或 /unbanip [8431:6010:2b7:30b2]");
+                return;
+            }
+            try {
+                boolean removed = server.ipBanManager.unban(ip);
+                server.log(removed ? "服务器: 已解除 IP 封禁 " + IpBanManager.normalizeIp(ip)
+                        : "服务器: 未找到该 IP 的封禁记录 " + IpBanManager.normalizeIp(ip));
+            } catch (IOException e) {
+                server.log("解除 IP 封禁失败: " + e.getMessage());
             }
         } else if (command.startsWith("/kick ")) {
             String username = command.substring(6).trim();

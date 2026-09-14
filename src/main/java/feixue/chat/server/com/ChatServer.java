@@ -92,6 +92,7 @@ public class ChatServer extends JFrame {
     ServerConsole console;
     HttpFrontend http;
     WebPanService webPan;
+    IpBanManager ipBanManager;
     ConfigManager config;
     MessageGuard messageGuard;
     ChatHistoryStore history;
@@ -119,10 +120,11 @@ public class ChatServer extends JFrame {
     static final String MUTED_USERS_FILE = "muted_users.txt";
     static final String ONLY_PD_CONFIG_FILE = "onlypd.json";
     static final String WEB_CONFIG_FILE = "web-config.json";
+    static final String IP_BAN_CONFIG_FILE = "ip-ban-config.json";
     static final String SSL_CONFIG_FILE = "ssl-config.json";
     static final int DEFAULT_SSL_PORT = 8443;
     static final String MINIMUM_VERSION_CONFIG_FILE = "version-config.json";
-    static final String DEFAULT_MIN_CLIENT_VERSION = "3.0.2";
+    static final String DEFAULT_MIN_CLIENT_VERSION = "3.0.3";
     static final String WEB_CLIENT_RESOURCE = "/web-client.html";
     static final long WEB_IDLE_TIMEOUT = 60L * 60L * 1000L;
     static final int WEB_MAX_VERIFY_ATTEMPTS = 5;
@@ -192,8 +194,9 @@ public class ChatServer extends JFrame {
         config = new ConfigManager(this); // 初始化配置管理
         try {
             webPan = new WebPanService(config.resolveConfigPath("webpan.properties"));
+            ipBanManager = new IpBanManager(config.resolveConfigPath(IP_BAN_CONFIG_FILE));
         } catch (IOException | RuntimeException e) {
-            throw new IllegalStateException("无法加载网盘配置", e);
+            throw new IllegalStateException("无法加载服务器访问配置", e);
         }
         messageGuard = new MessageGuard(this); // 初始化消息校验（配置加载会用到版本校验）
         config.loadOnlyPdConfiguration(true);
@@ -424,6 +427,8 @@ public class ChatServer extends JFrame {
     void stopServer() {
         log("正在停止服务器...");
         ui.disableWebAccess(false);
+        // Temporary connection-rate bans only protect one running server session.
+        ipBanManager.clearTemporaryBans();
         
         // 清理所有客户端连接
         disconnectAllClients();

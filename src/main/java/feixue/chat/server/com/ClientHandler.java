@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -22,6 +23,9 @@ class ClientHandler implements Runnable {
     private ClientTransport transport;
     private final boolean webClient;
     private final String clientIp;
+    private final String tcpChallengeQuestion;
+    private final int tcpChallengeAnswer;
+    private boolean tcpVerified;
     String clientId;
     String nickname; // 客户端昵称
     String group;    // 客户端所属群组
@@ -30,10 +34,16 @@ class ClientHandler implements Runnable {
     private final WebPanService.Session webSession;
     private int webVerificationAttempts;
     private String webAuthorizedGroup;
+    // The group authorised by a successful private-channel password login for this connection only.
+    private String authorizedGroup;
+    private boolean publicChannelAuthorized;
+    private int p2pVerificationFailures;
+    private long nextP2pVerificationAt;
     volatile long lastWebUserActivity = System.currentTimeMillis();
     private final BlockingQueue<String> liveAudioOutboundQueue = new ArrayBlockingQueue<>(12);
     private volatile boolean handlerActive = true;
     private final AtomicBoolean cleanupStarted = new AtomicBoolean(false);
+    private final AtomicBoolean connectionAdmissionChecked = new AtomicBoolean(false);
     private Thread liveAudioWriterThread;
 
     public ClientHandler(ChatServer server, Socket socket, ClientTransport transport, boolean webClient) {
@@ -54,6 +64,17 @@ class ClientHandler implements Runnable {
         this.webSession = webSession;
         this.clientIp = reportedClientIp == null || reportedClientIp.isEmpty()
                 ? socket.getInetAddress().getHostAddress() : reportedClientIp;
+        if (webClient) {
+            this.tcpChallengeQuestion = null;
+            this.tcpChallengeAnswer = -1;
+            this.tcpVerified = true;
+        } else {
+            int left = ThreadLocalRandom.current().nextInt(0, 11);
+            int right = ThreadLocalRandom.current().nextInt(0, 11 - left);
+            this.tcpChallengeQuestion = left + "+" + right;
+            this.tcpChallengeAnswer = left + right;
+            this.tcpVerified = false;
+        }
         try {
             if (webClient && !server.webAccessEnabled) {
                 transport.close();
@@ -76,6 +97,9 @@ class ClientHandler implements Runnable {
             server.clientNicknames.put(clientId, nickname); // 添加到昵称映射
             server.clientLastActiveTime.put(clientId, System.currentTimeMillis()); // 记录客户端连接时间
 
+            if (!webClient) {
+                sendMessage("/tcp_challenge|" + tcpChallengeQuestion);
+            }
             new Thread(this).start(); // 启动处理线程
             if (webClient) {
                 sendMessage("/web_challenge|" + server.http.encodeWebValue(server.webVerificationQuestion));
@@ -96,7 +120,15 @@ class ClientHandler implements Runnable {
             while ((message = transport.readMessage()) != null && server.isRunning) {
                 // 更新客户端最后活跃时间
                 server.clientLastActiveTime.put(clientId, System.currentTimeMillis());
+                if (!webClient && !tcpVerified) {
+                    if (!handleTcpVerification(message)) {
+                        continue;
+                    }
+                }
                 if (webClient && !handleWebControlMessage(message)) {
+                    continue;
+                }
+                if (requiresAuthenticatedChatSession(message) && !requireAuthenticatedChatSession(message)) {
                     continue;
                 }
                 if (webClient && isWebUserActivity(message)) {
@@ -123,6 +155,16 @@ class ClientHandler implements Runnable {
                 }
                 // 检查是否是登录验证消息
                 else if (message.startsWith("/login|")) {
+                    if (!requireVersionForLogin()) {
+                        continue;
+                    }
+                    if (authorizedGroup != null || publicChannelAuthorized) {
+                        sendMessage("/login_result|failure: 当前连接已完成频道验证");
+                        continue;
+                    }
+                    // Count every private password attempt. This protects failed password guesses without
+                    // treating TCP handshakes or /ping heartbeats as connection attempts.
+                    if (!registerConnectionAdmissionAttempt()) break;
                     String[] parts = message.substring(7).split("\\|", -1);
                     String account, password;
 
@@ -152,13 +194,20 @@ class ClientHandler implements Runnable {
                     // 验证账户和密码
                     String correctPassword = server.accountPasswords.get(account);
                     if (correctPassword != null && correctPassword.equals(password)) {
+                        String accountGroup = server.accountGroups.get(account);
+                        if (accountGroup == null) {
+                            sendMessage("/login_result|failure");
+                            server.log("客户端 " + clientId + " 的账户未配置频道: " + account);
+                            continue;
+                        }
+                        if (authorizedGroup != null && !authorizedGroup.equals(accountGroup)) {
+                            sendMessage("/login_result|failure: 当前连接已验证其他频道");
+                            server.log("客户端 " + clientId + " 尝试在同一连接切换登录频道");
+                            break;
+                        }
+                        authorizedGroup = accountGroup;
                         if (webClient) {
-                            webAuthorizedGroup = server.accountGroups.get(account);
-                            if (webAuthorizedGroup == null) {
-                                sendMessage("/login_result|failure");
-                                server.log("网页客户端 " + clientId + " 请求了无效频道: " + account);
-                                continue;
-                            }
+                            webAuthorizedGroup = accountGroup;
                             // Bind the authenticated account for server-wide captcha kickout,
                             // even before the browser chooses a chat nickname.
                             server.webPan.bindUser(webSession, account);
@@ -173,6 +222,13 @@ class ClientHandler implements Runnable {
                 }
                 // 检查是否是公共频道登录消息
                 else if (message.startsWith("/login_public|")) {
+                    if (!requireVersionForLogin()) {
+                        continue;
+                    }
+                    if (authorizedGroup != null || publicChannelAuthorized) {
+                        sendMessage("/login_result|failure: 当前连接已完成频道验证");
+                        continue;
+                    }
                     String username = message.substring(14); // 提取用户名
                     
                     // 验证用户名是否有效
@@ -194,7 +250,21 @@ class ClientHandler implements Runnable {
                         server.log("客户端 " + clientId + " 的公共频道用户名过长: " + username);
                         break;
                     }
+
+                    if (server.bannedUsers.contains(username)) {
+                        sendMessage("您已被服务器禁止，无法加入聊天");
+                        server.log("被禁止的用户试图加入公共频道: " + username);
+                        break;
+                    }
+                    if (server.userManager.isUserOnline(username)) {
+                        sendMessage("同名用户已在线，无法使用该昵称");
+                        server.log("拒绝公共频道重复昵称: " + username);
+                        break;
+                    }
                     
+                    // Only completed chat login counts toward IP connection-rate protection.
+                    if (!registerConnectionAdmissionAttempt()) break;
+
                     // 公共频道登录成功
                     sendMessage("/login_result|success");
                     server.log("客户端 " + clientId + " 公共频道登录成功: " + username);
@@ -204,6 +274,7 @@ class ClientHandler implements Runnable {
                     server.clientNicknames.put(clientId, nickname);
                     server.webPan.bindUser(webSession, nickname);
                     this.group = ChatServer.PUBLIC_CHANNEL_GROUP;
+                    this.publicChannelAuthorized = true;
                     server.clientGroups.put(clientId, group);
                     
                     // 将客户端添加到公共频道群组
@@ -212,6 +283,7 @@ class ClientHandler implements Runnable {
                     // 添加到在线用户列表
                     server.userManager.addOnlineUser(nickname);
                     server.userManager.notifyMutedStatus(this);
+                    registerChatUser();
                     
                     server.log("客户端 " + clientId + " 加入公共频道: " + group);
                     
@@ -228,7 +300,21 @@ class ClientHandler implements Runnable {
                     }
 
                     String newGroup = message.substring(7); // 提取群组部分
-                    if (!newGroup.isEmpty()) {
+                    if (newGroup.isEmpty()) {
+                        sendMessage("/group_result|failure: 频道不能为空");
+                        continue;
+                    }
+                    if (!isAuthorizedForGroup(newGroup)) {
+                        sendMessage("/group_result|failure: 频道未授权，请先验证频道密码");
+                        server.log("客户端 " + clientId + " 尝试未经授权加入频道: " + newGroup);
+                        break;
+                    }
+                    if (group != null && !group.equals(newGroup)) {
+                        sendMessage("/group_result|failure: 当前连接已加入频道");
+                        server.log("客户端 " + clientId + " 尝试在同一连接切换频道");
+                        break;
+                    }
+                    if (group == null) {
                         this.group = newGroup;
                         server.clientGroups.put(clientId, group);
 
@@ -249,6 +335,16 @@ class ClientHandler implements Runnable {
                         server.log("客户端 " + clientId + " 未通过版本验证，拒绝设置昵称");
                         sendMessage("/version_check|failed");
                         break;
+                    }
+                    if (group == null || !isAuthorizedForGroup(group)) {
+                        sendMessage("/session_ready|failure: 请先完成频道登录");
+                        server.log("客户端 " + clientId + " 未获频道授权即尝试设置昵称");
+                        break;
+                    }
+                    if (isAuthenticatedChatSession()) {
+                        sendMessage("/session_ready|failure: 当前连接已完成登录");
+                        server.log("客户端 " + clientId + " 尝试在已登录会话中修改昵称");
+                        continue;
                     }
 
                     String newNickname = message.substring(10); // 提取昵称部分
@@ -284,6 +380,8 @@ class ClientHandler implements Runnable {
                             break;
                         }
 
+                        if (!registerConnectionAdmissionAttempt()) break;
+
                         // 更新昵称
                         String oldNickname = nickname;
                         nickname = newNickname;
@@ -297,18 +395,7 @@ class ClientHandler implements Runnable {
 
                         server.log("客户端 " + clientId + " 设置昵称为: " + nickname);
                         
-                        // 生成点对点聊天密码
-                        String p2pPassword = server.userManager.generateP2PPassword();
-                        server.userP2PPasswords.put(nickname, p2pPassword);
-                        server.passwordToUser.put(p2pPassword, nickname);
-                        server.userHandlers.put(nickname, this);
-                        
-                        // 发送密码给客户端
-                        sendMessage("/p2p_password|" + p2pPassword);
-                        
-                        // 广播更新后的在线用户列表
-                        server.userManager.broadcastOnlineUsers();
-                        sendMessage("/session_ready|success");
+                        registerChatUser();
                     }
                 }
                 else if (message.equals("/ping")) {
@@ -596,13 +683,6 @@ class ClientHandler implements Runnable {
                 }
                 // 检查是否是点对点验证请求
                 else if (message.startsWith("/p2p_verify|")) {
-                    // 检查是否已通过版本验证
-                    if (!versionChecked) {
-                        server.log("客户端 " + clientId + " 未通过版本验证，拒绝发送点对点验证请求");
-                        sendMessage("/version_check|failed");
-                        break;
-                    }
-
                     // 检查用户是否被禁止
                     if (server.bannedUsers.contains(nickname)) {
                         sendMessage("您已被服务器禁止，无法发送验证请求");
@@ -616,10 +696,14 @@ class ClientHandler implements Runnable {
                         continue;
                     }
                     String targetPassword = parts[1];
+                    if (!allowP2pVerificationAttempt()) {
+                        continue;
+                    }
                     
                     // 查找目标用户
                     String targetUser = server.passwordToUser.get(targetPassword);
                     if (targetUser == null) {
+                        recordP2pVerificationFailure();
                         sendMessage("/p2p_verify_result|error|用户不存在或已离线");
                         server.log("客户端 " + nickname + " 尝试验证不存在的密码: " + targetPassword);
                         continue;
@@ -628,6 +712,7 @@ class ClientHandler implements Runnable {
                     // 查找目标用户的处理器
                     ClientHandler targetHandler = server.userHandlers.get(targetUser);
                     if (targetHandler == null) {
+                        recordP2pVerificationFailure();
                         sendMessage("/p2p_verify_result|error|用户不存在或已离线");
                         server.log("客户端 " + nickname + " 尝试验证离线用户: " + targetUser);
                         continue;
@@ -645,6 +730,8 @@ class ClientHandler implements Runnable {
                     targetHandler.sendMessage("/p2p_notification|" + nickname + "|" + senderPassword);
                     
                     // 向发起用户发送验证成功
+                    p2pVerificationFailures = 0;
+                    nextP2pVerificationAt = 0L;
                     sendMessage("/p2p_verify_result|success");
                     server.log("点对点验证成功，从 " + nickname + " 发送通知给 " + targetUser);
                 }
@@ -1201,6 +1288,30 @@ class ClientHandler implements Runnable {
         }
     }
 
+    /** Direct TCP clients must prove they can read the one-time connection challenge. */
+    private boolean handleTcpVerification(String message) throws IOException {
+        // Accept a bare number for simple terminal clients, while retaining an
+        // explicit command for clients that use the line protocol.
+        String supplied = message.startsWith("/tcp_verify|")
+                ? message.substring("/tcp_verify|".length()).trim() : message.trim();
+        if (supplied.isEmpty() || !supplied.matches("\\d{1,3}")) {
+            sendMessage("/tcp_verify_required|请先回答连接验证码");
+            return false;
+        }
+        try {
+            if (Integer.parseInt(supplied) != tcpChallengeAnswer) {
+                sendMessage("/tcp_verify_result|failure");
+                return false;
+            }
+        } catch (NumberFormatException e) {
+            sendMessage("/tcp_verify_result|failure");
+            return false;
+        }
+        tcpVerified = true;
+        sendMessage("/tcp_verify_result|success");
+        return true;
+    }
+
     private boolean handleWebControlMessage(String message) throws IOException {
         if (message.indexOf('\r') >= 0 || message.indexOf('\n') >= 0) {
             sendMessage("/web_error|消息不能包含换行符");
@@ -1289,6 +1400,80 @@ class ClientHandler implements Runnable {
             return false;
         }
         return true;
+    }
+
+    /** Only handshake and login commands may run before a registered chat session exists. */
+    private boolean requiresAuthenticatedChatSession(String message) {
+        return !(message.startsWith("/version|")
+                || message.startsWith("/login|")
+                || message.startsWith("/login_public|")
+                || message.startsWith("/group|")
+                || message.startsWith("/nickname|")
+                || message.equals("/ping"));
+    }
+
+    private boolean requireAuthenticatedChatSession(String message) {
+        if (isAuthenticatedChatSession()) {
+            return true;
+        }
+        server.log("客户端 " + clientId + " 未完成登录即发送协议: "
+                + (message.startsWith("/") ? message.split("\\|", 2)[0] : "普通消息"));
+        sendMessage("/auth_required|请先完成频道登录");
+        return false;
+    }
+
+    private boolean isAuthenticatedChatSession() {
+        return versionChecked && group != null && nickname != null && server.userHandlers.get(nickname) == this;
+    }
+
+    private boolean requireVersionForLogin() {
+        if (versionChecked) {
+            return true;
+        }
+        server.log("客户端 " + clientId + " 未通过版本验证，拒绝登录");
+        sendMessage("/login_result|failure: 请先完成版本验证");
+        return false;
+    }
+
+    private boolean isAuthorizedForGroup(String requestedGroup) {
+        // Raw clients must use /login_public before joining the built-in public
+        // channel. Web clients are authorized by the web challenge and private
+        // channels are authorized by their password login.
+        return (ChatServer.PUBLIC_CHANNEL_GROUP.equals(requestedGroup)
+                    && (publicChannelAuthorized || webClient))
+                || (authorizedGroup != null && authorizedGroup.equals(requestedGroup));
+    }
+
+    /** Registers the nickname as the unique authenticated identity and creates its P2P credential. */
+    private void registerChatUser() {
+        String p2pPassword = server.userManager.generateP2PPassword();
+        server.userP2PPasswords.put(nickname, p2pPassword);
+        server.passwordToUser.put(p2pPassword, nickname);
+        server.userHandlers.put(nickname, this);
+        sendMessage("/p2p_password|" + p2pPassword);
+        server.userManager.broadcastOnlineUsers();
+        sendMessage("/session_ready|success");
+    }
+
+    private boolean allowP2pVerificationAttempt() {
+        long now = System.currentTimeMillis();
+        if (now >= nextP2pVerificationAt) {
+            return true;
+        }
+        long waitSeconds = Math.max(1L, (nextP2pVerificationAt - now + 999L) / 1000L);
+        sendMessage("/p2p_verify_result|error|验证请求过于频繁，请 " + waitSeconds + " 秒后重试");
+        return false;
+    }
+
+    private void recordP2pVerificationFailure() throws IOException {
+        p2pVerificationFailures++;
+        nextP2pVerificationAt = System.currentTimeMillis()
+                + Math.min(1_000L, p2pVerificationFailures * 250L);
+        if (p2pVerificationFailures >= 5) {
+            server.log("客户端 " + nickname + " 点对点验证连续失败过多，已断开");
+            sendMessage("/p2p_verify_result|error|验证失败次数过多，请重新登录后再试");
+            closeConnection();
+        }
     }
 
     private boolean isAllowedWebClientMessage(String message) {
@@ -1522,6 +1707,16 @@ class ClientHandler implements Runnable {
 
     String getWebUserId() {
         return webSession == null ? null : webSession.userId;
+    }
+
+    private boolean registerConnectionAdmissionAttempt() throws IOException {
+        if (!connectionAdmissionChecked.compareAndSet(false, true)) return true;
+        IpBanManager.Decision decision = server.ipBanManager.registerConnection(clientIp);
+        if (decision == IpBanManager.Decision.ALLOWED) return true;
+        server.log("已拒绝 IP " + clientIp + " 的聊天接入尝试：" + decision.message);
+        try { sendMessage("IP 已被服务器封禁，无法建立聊天会话"); }
+        finally { closeConnection(); }
+        return false;
     }
 
     // 获取客户端群组

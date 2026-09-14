@@ -41,6 +41,7 @@ import javax.net.ssl.SSLSocket;
 // 网页前端功能：TCP 连接分流、HTTP/HTTPS 响应、WebSocket 握手与升级、SSL 监听、网页会话超时
 class HttpFrontend {
     private static final String FPS_MUSIC_CONFIG = "games/fps/fpsnmusic.json";
+    private static final int PROTOCOL_DETECTION_TIMEOUT_MS = 1000;
     private static final Pattern FPS_MUSIC_PATH_PATTERN = Pattern.compile(
             "\\\"backgroundMusicPath\\\"\\s*:\\s*\\\"((?:\\\\\\\\.|[^\\\"\\\\])*)\\\"");
     private final ChatServer server;
@@ -91,22 +92,18 @@ class HttpFrontend {
 
     static String resolveClientIp(InetAddress peer, String cfConnectingIp) {
         String directIp = peer == null ? "" : peer.getHostAddress();
-        if (!isCloudflareProxy(peer) || cfConnectingIp == null) return directIp;
-        String candidate = cfConnectingIp.trim();
-        if (candidate.length() > 45 || candidate.isEmpty()) return directIp;
-        boolean ipv4 = candidate.matches("\\d{1,3}(?:\\.\\d{1,3}){3}");
-        boolean ipv6 = candidate.indexOf(':') >= 0 && candidate.matches("[0-9A-Fa-f:.]+") ;
-        if (!ipv4 && !ipv6) return directIp;
-        try {
-            InetAddress parsed = InetAddress.getByName(candidate);
-            if ((ipv4 && parsed.getAddress().length != 4) || (ipv6 && parsed.getAddress().length != 16)) return directIp;
-            return parsed.getHostAddress();
-        } catch (IOException ignored) {
-            return directIp;
-        }
+        String forwardedIp = resolveCloudflareClientIp(peer, cfConnectingIp);
+        return forwardedIp == null ? directIp : forwardedIp;
     }
 
-    private static boolean isCloudflareProxy(InetAddress peer) {
+    static String resolveCloudflareClientIp(InetAddress peer, String cfConnectingIp) {
+        if (!isCloudflareProxy(peer) || cfConnectingIp == null) return null;
+        // Use the same strict canonicalization as the ban manager so an address
+        // cannot be accepted here but fail to match the configured ban later.
+        return IpBanManager.normalizeIp(cfConnectingIp);
+    }
+
+    static boolean isCloudflareProxy(InetAddress peer) {
         if (peer == null) return false;
         for (Cidr range : CLOUDFLARE_PROXY_RANGES) if (range.contains(peer)) return true;
         return false;
@@ -155,13 +152,27 @@ class HttpFrontend {
 
     void routeIncomingConnection(Socket socket) {
         try {
-            socket.setSoTimeout(10000);
+            InetAddress peer = socket.getInetAddress();
+            // Always enforce bans for the address that opened the TCP connection. A
+            // Cloudflare peer is only trusted for the client address carried in the
+            // HTTP header; skipping this check made proxy-originated connections
+            // bypass bans when the header was absent (or when the protocol was raw
+            // chat and had no HTTP headers at all).
+            if (!allowBlockedIp(socket, peer == null ? "" : peer.getHostAddress())) return;
+            socket.setSoTimeout(PROTOCOL_DETECTION_TIMEOUT_MS);
             BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
             input.mark(8);
             byte[] prefix = new byte[4];
             int prefixLength = 0;
+            boolean detectionTimedOut = false;
             while (prefixLength < prefix.length) {
-                int count = input.read(prefix, prefixLength, prefix.length - prefixLength);
+                int count;
+                try {
+                    count = input.read(prefix, prefixLength, prefix.length - prefixLength);
+                } catch (SocketTimeoutException e) {
+                    detectionTimedOut = true;
+                    break;
+                }
                 if (count < 0) {
                     socket.close();
                     return;
@@ -169,9 +180,10 @@ class HttpFrontend {
                 prefixLength += count;
             }
             input.reset();
-            String verb = new String(prefix, StandardCharsets.US_ASCII);
-            if ("GET ".equals(verb) || "HEAD".equals(verb) || "POST".equals(verb)
-                    || "PUT ".equals(verb) || "DELE".equals(verb) || "OPTI".equals(verb)) {
+            String verb = new String(prefix, 0, prefixLength, StandardCharsets.US_ASCII);
+            if (!detectionTimedOut && prefixLength == prefix.length
+                    && ("GET ".equals(verb) || "HEAD".equals(verb) || "POST".equals(verb)
+                    || "PUT ".equals(verb) || "DELE".equals(verb) || "OPTI".equals(verb))) {
                 handleHttpConnection(socket, input);
                 return;
             }
@@ -185,6 +197,14 @@ class HttpFrontend {
                 server.log("连接分流失败: " + e.getMessage());
             }
         }
+    }
+
+    private boolean allowBlockedIp(Socket socket, String ip) {
+        IpBanManager.Decision decision = server.ipBanManager.checkBlocked(ip);
+        if (decision == IpBanManager.Decision.ALLOWED) return true;
+        server.log("已拒绝 IP " + ip + " 的连接：" + decision.message);
+        closeQuietly(socket);
+        return false;
     }
 
     // 浏览器预连接、端口探测或代理取消 TLS 握手时，JSSE 会抛出该异常；连接并未进入聊天协议。
@@ -225,6 +245,10 @@ class HttpFrontend {
             }
         }
 
+        InetAddress peer = socket.getInetAddress();
+        String forwardedIp = resolveCloudflareClientIp(peer, headers.get("cf-connecting-ip"));
+        if (forwardedIp != null && !allowBlockedIp(socket, forwardedIp)) return;
+
         if (!server.webAccessEnabled) {
             sendHttpResponse(socket, "503 Service Unavailable", "text/html; charset=utf-8",
                     ("<!doctype html><meta charset=\"utf-8\"><title>网页端已关闭</title>"
@@ -247,7 +271,7 @@ class HttpFrontend {
         }
         if ("/webpan".equals(path) || path.startsWith("/webpan/")) {
             server.webPan.handle(socket, requestParts[0], target, headers,
-                    resolveClientIp(socket.getInetAddress(), headers.get("cf-connecting-ip")));
+                    resolveClientIp(peer, headers.get("cf-connecting-ip")));
             return;
         }
         if (!"GET".equals(requestParts[0])) {
@@ -279,7 +303,7 @@ class HttpFrontend {
             output.flush();
             socket.setSoTimeout(0);
             new ClientHandler(server, socket, new WebSocketTransport(socket, input, output), true, webSession,
-                    resolveClientIp(socket.getInetAddress(), headers.get("cf-connecting-ip")));
+                    resolveClientIp(peer, headers.get("cf-connecting-ip")));
             return;
         }
 

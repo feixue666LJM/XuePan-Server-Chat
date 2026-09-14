@@ -12,7 +12,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -35,9 +34,9 @@ class UserManager {
         for (Map.Entry<String, List<ClientHandler>> entry : server.groups.entrySet()) {
             List<ClientHandler> clients = entry.getValue();
             synchronized (clients) {
-                Iterator<ClientHandler> iterator = clients.iterator();
-                while (iterator.hasNext()) {
-                    ClientHandler client = iterator.next();
+                // groups are CopyOnWriteArrayList instances; their iterators are
+                // intentionally read-only, so remove from the list itself.
+                for (ClientHandler client : new ArrayList<>(clients)) {
                     if (username.equals(client.getNickname())) {
                         try {
                             client.sendMessage("您已被服务器禁止");
@@ -45,7 +44,7 @@ class UserManager {
                         } catch (Exception e) {
                             // 忽略异常
                         }
-                        iterator.remove();
+                        clients.remove(client);
                     }
                 }
             }
