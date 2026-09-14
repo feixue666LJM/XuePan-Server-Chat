@@ -124,7 +124,7 @@ public class ChatServer extends JFrame {
     static final String SSL_CONFIG_FILE = "ssl-config.json";
     static final int DEFAULT_SSL_PORT = 8443;
     static final String MINIMUM_VERSION_CONFIG_FILE = "version-config.json";
-    static final String DEFAULT_MIN_CLIENT_VERSION = "3.0.3";
+    static final String DEFAULT_MIN_CLIENT_VERSION = "3.0.4";
     static final String WEB_CLIENT_RESOURCE = "/web-client.html";
     static final long WEB_IDLE_TIMEOUT = 60L * 60L * 1000L;
     static final int WEB_MAX_VERIFY_ATTEMPTS = 5;

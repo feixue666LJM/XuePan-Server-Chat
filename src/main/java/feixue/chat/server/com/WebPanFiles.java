@@ -83,11 +83,21 @@ final class WebPanFiles {
           +      "box-shadow:0 1px 2px rgba(0,0,0,.06);font:13px/1.55 'Cascadia Mono',Consolas,'Courier New',monospace;"
           +      "white-space:pre-wrap;word-break:break-word;tab-size:4}"
           + ".empty{padding:24px;text-align:center;color:#8a93a0;background:#fff;border-radius:8px}"
+          + ".batch-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0;padding:10px 14px;"
+          +      "background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.06)}"
+          + ".batch-bar button{border:0;border-radius:6px;padding:7px 14px;background:#4a90e2;color:#fff;cursor:pointer;font:inherit}"
+          + ".batch-bar button:disabled{background:#b8c0ca;cursor:not-allowed}"
+          + ".batch-count{color:#6b7280;font-size:13px}"
+          + ".select-cell{width:48px;text-align:center!important}"
           + "@media(max-width:640px){td.r.hide,th.r.hide{display:none}.wrap{padding:10px}th,td{padding:8px}table{table-layout:fixed}th.r{width:85px}}";
 
     /* ======================= 请求分发 ======================= */
 
     static void handle(HttpExchange ex, Path root, DownloadGate downloadGate) {
+        handle(ex, root, downloadGate, 3);
+    }
+
+    static void handle(HttpExchange ex, Path root, DownloadGate downloadGate, int maxBatchFiles) {
         long t0 = System.nanoTime();
         int code = 200;
         String client = "-";
@@ -121,7 +131,7 @@ final class WebPanFiles {
             }
             if (Files.isDirectory(target)) {
                 String dirUrl = path.endsWith("/") ? path : path + "/";
-                listDir(ex, target, dirUrl, root, head, q);
+                listDir(ex, target, dirUrl, root, head, q, maxBatchFiles);
             } else if (Files.isRegularFile(target)) {
                 serveFile(ex, target, path, head, q, downloadGate);
             } else {
@@ -197,10 +207,25 @@ final class WebPanFiles {
         return m;
     }
 
+    static Map<String, List<String>> parseQueryValues(String rawQuery) {
+        Map<String, List<String>> values = new LinkedHashMap<>();
+        if (rawQuery == null || rawQuery.isEmpty()) return values;
+        for (String kv : rawQuery.split("&")) {
+            if (kv.isEmpty()) continue;
+            int i = kv.indexOf('=');
+            try {
+                String key = URLDecoder.decode(i < 0 ? kv : kv.substring(0, i), "UTF-8");
+                String value = i < 0 ? "" : URLDecoder.decode(kv.substring(i + 1), "UTF-8");
+                values.computeIfAbsent(key, ignored -> new ArrayList<>()).add(value);
+            } catch (Exception ignore) { }
+        }
+        return values;
+    }
+
     /* ======================= 目录列表 ======================= */
 
     static void listDir(HttpExchange ex, Path dir, String dirUrl, Path root,
-                        boolean head, Map<String, String> q) throws IOException {
+                        boolean head, Map<String, String> q, int maxBatchFiles) throws IOException {
         List<Path> items = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
             for (Path p : ds) items.add(p);
@@ -238,11 +263,17 @@ final class WebPanFiles {
         }
         b.append("</nav>");
 
-        b.append("<table><thead><tr><th>名称</th>")
+        int selectionLimit = Math.max(1, Math.min(20, maxBatchFiles));
+        b.append("<form method=\"get\" action=\"/webpan/_batch\" id=\"batchForm\" data-batch-limit=\"")
+         .append(selectionLimit).append("\">")
+         .append("<div class=\"batch-bar\"><span class=\"batch-count\" id=\"batchCount\">已选择 0/")
+         .append(selectionLimit).append(" 个文件</span>")
+         .append("<button type=\"submit\" id=\"batchDownload\">下载所选文件</button></div>")
+         .append("<table><thead><tr><th class=\"select-cell\">选择</th><th>名称</th>")
          .append("<th class=\"r\">大小</th><th class=\"r hide\">修改时间</th></tr></thead><tbody>");
 
         if (!dirUrl.equals("/")) {
-            b.append("<tr><td class=\"name\"><a href=\"").append(esc(enc(parentOf(dirUrl)))).append("\">⬆ 上级目录</a></td>")
+            b.append("<tr><td class=\"select-cell\"></td><td class=\"name\"><a href=\"").append(esc(enc(parentOf(dirUrl)))).append("\">⬆ 上级目录</a></td>")
              .append("<td class=\"r\">-</td><td class=\"r hide\">-</td></tr>");
         }
 
@@ -256,7 +287,12 @@ final class WebPanFiles {
             String time = fmtTime(mtimeOf(p));
             String icon = isDir ? "📁" : iconOf(ext);
 
-            b.append("<tr><td class=\"name\">")
+            b.append("<tr><td class=\"select-cell\">");
+            if (!isDir) {
+                b.append("<input type=\"checkbox\" name=\"file\" value=\"").append(esc(childUrl))
+                 .append("\" data-batch-file=\"1\" aria-label=\"选择 ").append(esc(name)).append("\">");
+            }
+            b.append("</td><td class=\"name\">")
              .append("<a href=\"").append(esc(enc(isDir ? childUrl + "/" : childUrl))).append("\">")
              .append(icon).append(' ').append(esc(name)).append(isDir ? "/" : "").append("</a>");
 
@@ -269,7 +305,7 @@ final class WebPanFiles {
 
             if (isDir) dirs++; else files++;
         }
-        b.append("</tbody></table>");
+        b.append("</tbody></table></form>");
 
         if (items.isEmpty()) {
             b.append("<div class=\"empty\" style=\"margin-top:12px\">这个目录是空的，把文件放进来即可。</div>");
@@ -408,7 +444,7 @@ final class WebPanFiles {
         Headers h = ex.getResponseHeaders();
         h.set("Content-Type", "text/html; charset=utf-8");
         h.set("X-Content-Type-Options", "nosniff");
-        h.set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'");
+        h.set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'");
         h.set("Content-Length", String.valueOf(out.length));
         if (head) { ex.sendResponseHeaders(code, -1); return; }
         ex.sendResponseHeaders(code, out.length);
@@ -529,6 +565,14 @@ final class WebPanFiles {
             }
         }
         return sb.toString();
+    }
+
+    static String encodeQueryValue(String value) {
+        try {
+            return java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20");
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Unable to encode query value", e);
+        }
     }
 
     static String esc(String s) {

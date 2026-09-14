@@ -92,6 +92,9 @@ class ChatServerUi {
     JLabel webClientCountLabel;
     JTextField webPanRootField;
     JTextField webPanCaptchaDirectoryField;
+    JTextField webPanMaxDownloadsField;
+    JTextField webPanMaxDownloadGiBField;
+    JTextField webPanMaxBatchFilesField;
     JCheckBox webPanEnabledCheckBox;
     JLabel webPanStatusLabel;
     JLabel sslStatusLabel;
@@ -270,18 +273,44 @@ class ChatServerUi {
         });
         captchaDirectory.add(captchaBrowse, BorderLayout.EAST);
         settings.add(captchaDirectory);
+        webPanMaxDownloadsField = new JTextField(Integer.toString(server.webPan.getMaxActiveDownloads()), 8);
+        JPanel maxDownloadsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        maxDownloadsPanel.add(new JLabel("最多同时下载线程："));
+        maxDownloadsPanel.add(webPanMaxDownloadsField);
+        settings.add(maxDownloadsPanel);
+        webPanMaxDownloadGiBField = new JTextField(Long.toString(
+                server.webPan.getMaxActiveDownloadBytes() / (1024L * 1024L * 1024L)), 8);
+        JPanel maxDownloadGiBPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        maxDownloadGiBPanel.add(new JLabel("活跃下载容量上限（GiB）："));
+        maxDownloadGiBPanel.add(webPanMaxDownloadGiBField);
+        settings.add(maxDownloadGiBPanel);
+        webPanMaxBatchFilesField = new JTextField(Integer.toString(server.webPan.getMaxBatchFiles()), 8);
+        JPanel maxBatchFilesPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        maxBatchFilesPanel.add(new JLabel("最多选择文件数："));
+        maxBatchFilesPanel.add(webPanMaxBatchFilesField);
+        settings.add(maxBatchFilesPanel);
         webPanEnabledCheckBox = new JCheckBox("启用肥雪网盘", server.webPan.isEnabled());
+        webPanEnabledCheckBox.addActionListener(e -> refreshWebPanSettingsState());
         settings.add(webPanEnabledCheckBox);
         JButton save = new JButton("保存并应用");
         save.addActionListener(e -> {
             try {
+                int maxDownloads = Integer.parseInt(webPanMaxDownloadsField.getText().trim());
+                long maxDownloadGiB = Long.parseLong(webPanMaxDownloadGiBField.getText().trim());
+                int maxBatchFiles = Integer.parseInt(webPanMaxBatchFilesField.getText().trim());
                 server.webPan.configure(webPanRootField.getText(), webPanCaptchaDirectoryField.getText(),
-                        webPanEnabledCheckBox.isSelected());
+                        webPanEnabledCheckBox.isSelected(), maxDownloads,
+                        maxDownloadGiB * 1024L * 1024L * 1024L, maxBatchFiles);
                 webPanRootField.setText(server.webPan.getRoot().toString());
                 webPanCaptchaDirectoryField.setText(server.webPan.getCaptchaDirectory() == null
                         ? "" : server.webPan.getCaptchaDirectory().toString());
+                webPanMaxDownloadsField.setText(Integer.toString(server.webPan.getMaxActiveDownloads()));
+                webPanMaxDownloadGiBField.setText(Long.toString(server.webPan.getMaxActiveDownloadBytes()
+                        / (1024L * 1024L * 1024L)));
+                webPanMaxBatchFilesField.setText(Integer.toString(server.webPan.getMaxBatchFiles()));
                 server.log("肥雪网盘设置已保存：" + (server.webPan.isEnabled() ? "启用" : "关闭"));
                 refreshWebControlState();
+                refreshWebPanSettingsState();
             } catch (IOException | RuntimeException error) {
                 JOptionPane.showMessageDialog(server, "保存失败：" + error.getMessage(), "肥雪网盘", JOptionPane.ERROR_MESSAGE);
             }
@@ -292,14 +321,35 @@ class ChatServerUi {
         JPanel status = new JPanel(new GridLayout(0, 1, 0, 8));
         webPanStatusLabel = new JLabel();
         status.add(webPanStatusLabel);
+        status.add(new JLabel("当前活跃下载："));
+        JLabel activeDownloads = new JLabel();
+        status.add(activeDownloads);
         status.add(new JLabel("访问地址：https://服务器地址:" + server.sslPort + "/webpan/"));
         status.add(new JLabel("下载必须完成图片验证；图片仅支持 .png，答案为文件名（不含后缀，区分大小写）。"));
         JPanel center = new JPanel(new BorderLayout());
         center.add(status, BorderLayout.NORTH);
         panel.add(center, BorderLayout.CENTER);
         panel.add(actions, BorderLayout.SOUTH);
+        new javax.swing.Timer(1000, e -> {
+            long gib = 1024L * 1024L * 1024L;
+            activeDownloads.setText(server.webPan.getActiveDownloadCount() + " / "
+                    + server.webPan.getMaxActiveDownloads() + " 个线程，已占用 "
+                    + String.format(java.util.Locale.ROOT, "%.2f", (double) server.webPan.getActiveDownloadBytes() / gib)
+                    + " / " + (server.webPan.getMaxActiveDownloadBytes() / gib) + " GiB");
+        }).start();
+        refreshWebPanSettingsState();
         refreshWebControlState();
         return panel;
+    }
+
+    private void refreshWebPanSettingsState() {
+        if (webPanEnabledCheckBox == null) return;
+        boolean editable = !webPanEnabledCheckBox.isSelected();
+        webPanRootField.setEnabled(editable);
+        webPanCaptchaDirectoryField.setEnabled(editable);
+        webPanMaxDownloadsField.setEnabled(editable);
+        webPanMaxDownloadGiBField.setEnabled(editable);
+        webPanMaxBatchFilesField.setEnabled(editable);
     }
 
     boolean saveWebSettingsFromUi(boolean showConfirmation) {

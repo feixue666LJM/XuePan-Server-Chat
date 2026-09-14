@@ -71,7 +71,7 @@ final class WebPanExchange extends HttpExchange {
         response.set("Referrer-Policy", "no-referrer");
         response.set("X-Frame-Options", "SAMEORIGIN");
         response.set("X-Robots-Tag", "noindex, nofollow, noarchive");
-        if (!response.containsKey("Content-Length") && code != 204) {
+        if (!response.containsKey("Content-Length") && code != 204 && length >= 0) {
             response.set("Content-Length", Long.toString(Math.max(0, length)));
         }
         String reason;

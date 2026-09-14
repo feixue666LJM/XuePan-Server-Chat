@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -24,9 +25,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class WebPanService {
     static final int MAX_ACTIVE_DOWNLOADS = 50;
+    /** Maximum aggregate size of files reserved for active transfers (7 GiB). */
+    static final long MAX_ACTIVE_DOWNLOAD_BYTES = 7L * 1024L * 1024L * 1024L;
+    static final int MAX_BATCH_FILES = 3;
     static final long DEFAULT_DOWNLOAD_INTERVAL_MS = 30_000L;
     static final long BURST_DOWNLOAD_INTERVAL_MS = 5 * 60_000L;
     static final long BURST_PENALTY_DURATION_MS = 60 * 60_000L;
@@ -34,8 +39,12 @@ final class WebPanService {
     static final long CAPTCHA_LIFETIME_MS = 5 * 60_000L;
     private final Path configPath;
     private final LongSupplier clock;
-    private final Semaphore downloadSlots;
+    private volatile Semaphore downloadSlots;
+    private volatile int maxActiveDownloads;
+    private volatile long maxActiveDownloadBytes;
+    private volatile int maxBatchFiles;
     private final AtomicInteger activeDownloads = new AtomicInteger();
+    private final AtomicLong activeDownloadBytes = new AtomicLong();
     private final ConcurrentHashMap<String, FileRateState> fileRateStates = new ConcurrentHashMap<>();
     private Path root = Paths.get(WebPanFiles.DEFAULT_ROOT).toAbsolutePath().normalize();
     private Path captchaDirectory;
@@ -55,15 +64,16 @@ final class WebPanService {
         final String token;
         final Path image;
         final String answer;
-        final String targetFile;
+        final Set<String> targetFiles;
+        final Set<String> downloadedFiles = new LinkedHashSet<>();
         final long expiresAt;
         boolean passed;
 
-        CaptchaChallenge(String token, Path image, String answer, String targetFile, long expiresAt) {
+        CaptchaChallenge(String token, Path image, String answer, Set<String> targetFiles, long expiresAt) {
             this.token = token;
             this.image = image;
             this.answer = answer;
-            this.targetFile = targetFile;
+            this.targetFiles = new LinkedHashSet<>(targetFiles);
             this.expiresAt = expiresAt;
         }
     }
@@ -82,6 +92,7 @@ final class WebPanService {
         private final int rejectionStatus;
         private final boolean html;
         private final Runnable afterResponse;
+        private final long reservedBytes;
         private final AtomicBoolean released = new AtomicBoolean();
 
         private DownloadAdmission(WebPanService service) {
@@ -91,6 +102,7 @@ final class WebPanService {
             this.rejectionStatus = 0;
             this.html = false;
             this.afterResponse = null;
+            this.reservedBytes = 0;
         }
 
         private DownloadAdmission(int retryAfterSeconds, String message) {
@@ -105,6 +117,17 @@ final class WebPanService {
             this.rejectionStatus = rejectionStatus;
             this.html = html;
             this.afterResponse = afterResponse;
+            this.reservedBytes = 0;
+        }
+
+        private DownloadAdmission(WebPanService service, long reservedBytes) {
+            this.service = service;
+            this.retryAfterSeconds = 0;
+            this.message = "";
+            this.rejectionStatus = 0;
+            this.html = false;
+            this.afterResponse = null;
+            this.reservedBytes = reservedBytes;
         }
 
         boolean isAllowed() { return service != null; }
@@ -116,7 +139,7 @@ final class WebPanService {
 
         @Override public void close() {
             if (service != null && released.compareAndSet(false, true)) {
-                service.releaseDownloadSlot();
+                service.releaseDownloadSlot(reservedBytes);
             }
         }
     }
@@ -184,7 +207,9 @@ final class WebPanService {
         if (clock == null || maxActiveDownloads < 1) throw new IllegalArgumentException("Invalid download limiter configuration");
         this.configPath = configPath;
         this.clock = clock;
-        this.downloadSlots = new Semaphore(maxActiveDownloads, true);
+        this.maxActiveDownloads = maxActiveDownloads;
+        this.maxActiveDownloadBytes = MAX_ACTIVE_DOWNLOAD_BYTES;
+        this.maxBatchFiles = MAX_BATCH_FILES;
         if (Files.isRegularFile(configPath)) {
             Properties settings = new Properties();
             try (InputStream in = Files.newInputStream(configPath)) { settings.load(in); }
@@ -192,7 +217,11 @@ final class WebPanService {
             String captchaPath = settings.getProperty("captchaDirectory", "").trim();
             if (!captchaPath.isEmpty()) captchaDirectory = Paths.get(captchaPath).toAbsolutePath().normalize();
             enabled = Boolean.parseBoolean(settings.getProperty("enabled", "false"));
+            this.maxActiveDownloads = readIntSetting(settings, "maxActiveDownloads", maxActiveDownloads, 1, 1000);
+            this.maxActiveDownloadBytes = readGiBSetting(settings, "maxActiveDownloadGiB", MAX_ACTIVE_DOWNLOAD_BYTES);
+            this.maxBatchFiles = readIntSetting(settings, "maxBatchFiles", MAX_BATCH_FILES, 1, 20);
         }
+        this.downloadSlots = new Semaphore(this.maxActiveDownloads, true);
     }
 
     synchronized Path getRoot() { return root; }
@@ -203,6 +232,10 @@ final class WebPanService {
     }
     synchronized boolean isCaptchaAvailable() { return findCaptchaImages(captchaDirectory).size() > 0; }
     int getActiveDownloadCount() { return activeDownloads.get(); }
+    long getActiveDownloadBytes() { return activeDownloadBytes.get(); }
+    int getMaxActiveDownloads() { return maxActiveDownloads; }
+    long getMaxActiveDownloadBytes() { return maxActiveDownloadBytes; }
+    int getMaxBatchFiles() { return maxBatchFiles; }
 
     DownloadAdmission tryAcquireDownload(Path file) {
         final long now = clock.getAsLong();
@@ -243,21 +276,61 @@ final class WebPanService {
         if (!downloadSlots.tryAcquire()) {
             return new DownloadAdmission(1, "并发已满，请稍后重试");
         }
+        final long size;
+        try {
+            size = Files.size(file);
+        } catch (IOException e) {
+            downloadSlots.release();
+            return new DownloadAdmission(0, "文件不可用，请稍后重试");
+        }
+        if (size < 0 || size > maxActiveDownloadBytes) {
+            downloadSlots.release();
+            return new DownloadAdmission(1, overloadPage(), 503, true, null);
+        }
+        while (true) {
+            long current = activeDownloadBytes.get();
+            if (current > maxActiveDownloadBytes - size
+                    || !activeDownloadBytes.compareAndSet(current, current + size)) {
+                if (current > maxActiveDownloadBytes - size) {
+                    downloadSlots.release();
+                    return new DownloadAdmission(1, overloadPage(), 503, true, null);
+                }
+                continue;
+            }
+            break;
+        }
         activeDownloads.incrementAndGet();
-        return new DownloadAdmission(this);
+        return new DownloadAdmission(this, size);
     }
 
-    private void releaseDownloadSlot() {
+    private void releaseDownloadSlot(long bytes) {
         activeDownloads.decrementAndGet();
+        activeDownloadBytes.addAndGet(-bytes);
         downloadSlots.release();
     }
 
     synchronized void configure(String directory, boolean allow) throws IOException {
-        configure(directory, captchaDirectory == null ? "" : captchaDirectory.toString(), allow);
+        configure(directory, captchaDirectory == null ? "" : captchaDirectory.toString(), allow,
+                maxActiveDownloads, maxActiveDownloadBytes, maxBatchFiles);
     }
 
     synchronized void configure(String directory, String captchaFolder, boolean allow) throws IOException {
+        configure(directory, captchaFolder, allow, maxActiveDownloads, maxActiveDownloadBytes, maxBatchFiles);
+    }
+
+    synchronized void configure(String directory, String captchaFolder, boolean allow,
+                                 int requestedMaxDownloads, long requestedMaxBytes, int requestedMaxBatch)
+            throws IOException {
         if (directory.trim().isEmpty()) throw new IOException("请选择共享目录");
+        validateLimits(requestedMaxDownloads, requestedMaxBytes, requestedMaxBatch);
+        if (enabled && allow && (requestedMaxDownloads != maxActiveDownloads
+                || requestedMaxBytes != maxActiveDownloadBytes || requestedMaxBatch != maxBatchFiles)) {
+            throw new IOException("网盘总开关开启时不能修改下载限制，请先关闭网盘");
+        }
+        if (activeDownloads.get() != 0 && (requestedMaxDownloads != maxActiveDownloads
+                || requestedMaxBytes != maxActiveDownloadBytes || requestedMaxBatch != maxBatchFiles)) {
+            throw new IOException("仍有下载正在进行，请等待下载结束后再修改下载限制");
+        }
         Path next = Paths.get(directory.trim()).toAbsolutePath().normalize();
         Path nextCaptcha = captchaFolder == null || captchaFolder.trim().isEmpty() ? null
                 : Paths.get(captchaFolder.trim()).toAbsolutePath().normalize();
@@ -271,6 +344,9 @@ final class WebPanService {
         settings.setProperty("root", next.toString());
         settings.setProperty("captchaDirectory", nextCaptcha == null ? "" : nextCaptcha.toString());
         settings.setProperty("enabled", Boolean.toString(allow));
+        settings.setProperty("maxActiveDownloads", Integer.toString(requestedMaxDownloads));
+        settings.setProperty("maxActiveDownloadGiB", Long.toString(requestedMaxBytes / (1024L * 1024L * 1024L)));
+        settings.setProperty("maxBatchFiles", Integer.toString(requestedMaxBatch));
         Path parent = configPath.toAbsolutePath().getParent();
         Files.createDirectories(parent);
         Path temp = Files.createTempFile(parent, "webpan-", ".tmp");
@@ -285,6 +361,31 @@ final class WebPanService {
         root = next;
         captchaDirectory = nextCaptcha;
         enabled = allow;
+        maxActiveDownloads = requestedMaxDownloads;
+        maxActiveDownloadBytes = requestedMaxBytes;
+        maxBatchFiles = requestedMaxBatch;
+        downloadSlots = new Semaphore(maxActiveDownloads, true);
+    }
+
+    private static void validateLimits(int downloads, long bytes, int batch) throws IOException {
+        if (downloads < 1 || downloads > 1000) throw new IOException("同时下载线程数必须在1至1000之间");
+        if (bytes < 1L * 1024L * 1024L * 1024L || bytes > 1024L * 1024L * 1024L * 1024L)
+            throw new IOException("活跃下载容量必须在1至1024 GiB之间");
+        if (batch < 1 || batch > 20) throw new IOException("最多选择文件数必须在1至20之间");
+    }
+
+    private static int readIntSetting(Properties settings, String key, int fallback, int min, int max) {
+        try {
+            int value = Integer.parseInt(settings.getProperty(key, Integer.toString(fallback)).trim());
+            return value >= min && value <= max ? value : fallback;
+        } catch (RuntimeException e) { return fallback; }
+    }
+
+    private static long readGiBSetting(Properties settings, String key, long fallback) {
+        try {
+            long gib = Long.parseLong(settings.getProperty(key, "7").trim());
+            return gib >= 1 && gib <= 1024 ? gib * 1024L * 1024L * 1024L : fallback;
+        } catch (RuntimeException e) { return fallback; }
     }
 
     synchronized void setUserDisconnecter(UserDisconnecter value) {
@@ -347,7 +448,7 @@ final class WebPanService {
             session.captchaChallenges.remove(token);
             challenge = null;
         }
-        if (challenge != null && !fileKey.equals(challenge.targetFile)) challenge = null;
+        if (challenge != null && !challenge.targetFiles.equals(java.util.Collections.singleton(fileKey))) challenge = null;
         if (challenge != null && answer != null) {
             if (challenge.answer.equals(answer)) {
                 challenge.passed = true;
@@ -371,7 +472,8 @@ final class WebPanService {
         String expected = imageName.substring(0, imageName.length() - 4);
         String newToken = newCaptchaToken();
         session.captchaChallenges.clear();
-        session.captchaChallenges.put(newToken, new CaptchaChallenge(newToken, image, expected, fileKey,
+        session.captchaChallenges.put(newToken, new CaptchaChallenge(newToken, image, expected,
+                java.util.Collections.singleton(fileKey),
                 now + CAPTCHA_LIFETIME_MS));
         // This is a normal document navigation, not an HTTP download failure.
         return new DownloadAdmission(0, captchaPage(exchange, newToken), 200, true, null);
@@ -496,14 +598,208 @@ final class WebPanService {
         try {
             if ("/_captcha/image".equals(exchange.getRequestURI().getRawPath())) {
                 serveCaptchaImage(exchange, authorized);
+            } else if ("/_batch".equals(exchange.getRequestURI().getRawPath())) {
+                handleBatchDownload(exchange, authorized, publishedRoot);
             } else {
                 WebPanFiles.handle(exchange, publishedRoot,
-                        (request, file) -> requireCaptcha(authorized, (WebPanExchange) request, file));
+                        (request, file) -> requireCaptcha(authorized, (WebPanExchange) request, file), maxBatchFiles);
             }
         }
         finally {
             exchange.close();
             synchronized (this) { transfers.remove(socket); }
         }
+    }
+
+    private void handleBatchDownload(WebPanExchange exchange, Session session, Path publishedRoot)
+            throws IOException {
+        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Allow", "GET");
+            WebPanFiles.sendText(exchange, 405, "405 只支持 GET", false);
+            return;
+        }
+        Map<String, List<String>> query = WebPanFiles.parseQueryValues(exchange.getRequestURI().getRawQuery());
+        List<String> requested = query.get("file");
+        if (requested == null || requested.isEmpty() || requested.size() > maxBatchFiles) {
+            WebPanFiles.sendText(exchange, 400, "请选择 1 至 " + maxBatchFiles + " 个文件", false);
+            return;
+        }
+
+        List<Path> files = new ArrayList<>();
+        Set<String> fileKeys = new LinkedHashSet<>();
+        long totalBytes = 0;
+        for (String value : requested) {
+            if (value == null || value.isEmpty()) {
+                WebPanFiles.sendText(exchange, 400, "文件选择无效", false);
+                return;
+            }
+            Path file = WebPanFiles.resolve(publishedRoot, value);
+            if (file == null || !Files.isRegularFile(file)) {
+                WebPanFiles.sendText(exchange, 403, "文件选择无效", false);
+                return;
+            }
+            try {
+                String key = file.toRealPath().toString();
+                if (!fileKeys.add(key)) {
+                    WebPanFiles.sendText(exchange, 400, "不能重复选择同一个文件", false);
+                    return;
+                }
+                files.add(file.toRealPath());
+                long size = Files.size(file);
+                if (size < 0 || totalBytes > maxActiveDownloadBytes - size) {
+                    sendOverload(exchange);
+                    return;
+                }
+                totalBytes += size;
+            } catch (IOException e) {
+                WebPanFiles.sendText(exchange, 404, "文件已不存在", false);
+                return;
+            }
+        }
+
+        String token = firstQueryValue(query, "captcha");
+        String answer = firstQueryValue(query, "answer");
+        boolean answerAccepted = false;
+        boolean answerRejected = false;
+        boolean authorizedSingleDownload = false;
+        boolean capacityRejected = false;
+        String failedUser = null;
+        Path authorizedFile = null;
+        long now = clock.getAsLong();
+        synchronized (this) {
+            CaptchaChallenge challenge = token == null ? null : session.captchaChallenges.get(token);
+            if (challenge != null && now >= challenge.expiresAt) {
+                session.captchaChallenges.remove(token);
+                challenge = null;
+            }
+            if (challenge != null && !challenge.passed && !challenge.targetFiles.equals(fileKeys)) {
+                challenge = null;
+            }
+            // An answer may only complete the exact batch for which the challenge was issued.
+            // A passed challenge may still authorize its individual files below, but it must
+            // never be re-bound to a different batch by replaying the answer parameter.
+            if (challenge != null && answer != null && !challenge.targetFiles.equals(fileKeys)) {
+                challenge = null;
+            }
+            if (challenge != null && answer != null) {
+                if (challenge.answer.equals(answer)) {
+                    challenge.passed = true;
+                    answerAccepted = true;
+                } else {
+                    session.captchaChallenges.remove(token);
+                    answerRejected = true;
+                    failedUser = session.userId;
+                }
+            } else if (challenge != null && challenge.passed && requested.size() == 1
+                    && challenge.targetFiles.containsAll(fileKeys)
+                    && !challenge.downloadedFiles.containsAll(fileKeys)) {
+                if (!hasDownloadCapacity(totalBytes)) {
+                    capacityRejected = true;
+                } else {
+                    // Consume this file's one-time authorization while holding the short state lock.
+                    authorizedSingleDownload = true;
+                    authorizedFile = files.get(0);
+                    challenge.downloadedFiles.add(fileKeys.iterator().next());
+                    if (challenge.downloadedFiles.containsAll(challenge.targetFiles)) {
+                        session.captchaChallenges.remove(token);
+                    }
+                }
+            }
+        }
+        if (answerAccepted) {
+            boolean answerCapacityRejected = false;
+            synchronized (this) {
+                if (!hasDownloadCapacity(totalBytes)) {
+                    session.captchaChallenges.remove(token);
+                    answerCapacityRejected = true;
+                }
+            }
+            if (answerCapacityRejected) {
+                sendOverload(exchange);
+                return;
+            }
+            WebPanFiles.sendHtml(exchange, 200, batchDownloadPage(token, requested), false);
+            return;
+        }
+        if (capacityRejected) {
+            sendOverload(exchange);
+            return;
+        }
+        if (answerRejected) {
+            WebPanFiles.sendHtml(exchange, 403,
+                    "<main class=\"wrap\"><h1>验证答案错误，已断开所有连接</h1></main>", false);
+            failCaptcha(session, failedUser);
+            return;
+        }
+        if (authorizedSingleDownload) {
+            WebPanFiles.serveDownload(exchange, authorizedFile, authorizedFile.getFileName().toString(),
+                    Files.size(authorizedFile), false, (request, selected) -> tryAcquireDownload(selected));
+            return;
+        }
+
+        List<Path> images = findCaptchaImages(captchaDirectory);
+        if (images.isEmpty()) {
+            WebPanFiles.sendHtml(exchange, 503,
+                    "<main class=\"wrap\"><h1>验证图片不可用，下载已拒绝</h1></main>", false);
+            return;
+        }
+        Path image = images.get(RANDOM.nextInt(images.size()));
+        String imageName = image.getFileName().toString();
+        String expected = imageName.substring(0, imageName.length() - 4);
+        String newToken = newCaptchaToken();
+        synchronized (this) {
+            session.captchaChallenges.clear();
+            session.captchaChallenges.put(newToken, new CaptchaChallenge(newToken, image, expected, fileKeys,
+                    now + CAPTCHA_LIFETIME_MS));
+        }
+        WebPanFiles.sendHtml(exchange, 200, batchCaptchaPage(newToken, requested), false);
+    }
+
+    private static String firstQueryValue(Map<String, List<String>> query, String key) {
+        List<String> values = query.get(key);
+        return values == null || values.isEmpty() ? null : values.get(0);
+    }
+
+    private boolean hasDownloadCapacity(long bytes) {
+        if (bytes < 0 || bytes > maxActiveDownloadBytes) return false;
+        long current = activeDownloadBytes.get();
+        return current <= maxActiveDownloadBytes - bytes;
+    }
+
+    private static void sendOverload(WebPanExchange exchange) throws IOException {
+        WebPanFiles.sendHtml(exchange, 503, overloadPage(), false);
+    }
+
+    private static String overloadPage() {
+        return WebPanFiles.htmlPage("服务器过载", "<main class=\"wrap\"><h1>服务器过载，请稍后重试</h1></main>");
+    }
+
+    private String batchDownloadPage(String token, List<String> files) {
+        StringBuilder body = new StringBuilder("<main class=\"wrap\"><h1>验证通过</h1>")
+                .append("<p>所选文件已通过验证，下载即将开始。</p><div class=\"actions\">");
+        for (String file : files) {
+            String location = "/webpan/_batch?captcha=" + WebPanFiles.encodeQueryValue(token)
+                    + "&file=" + WebPanFiles.encodeQueryValue(file);
+            body.append("<a class=\"btn\" data-batch-download=\"1\" download style=\"display:none\" href=\"")
+                    .append(WebPanFiles.esc(location))
+                    .append("\">下载 ").append(WebPanFiles.esc(file.substring(file.lastIndexOf('/') + 1))).append("</a>");
+        }
+        body.append("</div><p class=\"meta\">浏览器可能会分别询问多个文件的下载权限。</p></main>");
+        return WebPanFiles.htmlPage("验证通过", body.toString());
+    }
+
+    private String batchCaptchaPage(String token, List<String> files) {
+        StringBuilder body = new StringBuilder("<main class=\"wrap\"><h1>下载验证</h1>")
+                .append("<p>请输入下方图片的文件名（不含 .png，区分大小写）。验证通过后将下载所选文件。</p>")
+                .append("<form method=\"get\" action=\"/webpan/_batch\">")
+                .append("<p><img src=\"/webpan/_captcha/image?captcha=")
+                .append(WebPanFiles.esc(token)).append("\" alt=\"验证图片\" style=\"max-width:100%;max-height:260px\"></p>")
+                .append("<label>答案 <input name=\"answer\" autocomplete=\"off\" required autofocus></label>")
+                .append("<input type=\"hidden\" name=\"captcha\" value=\"").append(WebPanFiles.esc(token)).append("\">");
+        for (String file : files) {
+            body.append("<input type=\"hidden\" name=\"file\" value=\"")
+                    .append(WebPanFiles.esc(file)).append("\">");
+        }
+        return WebPanFiles.htmlPage("下载验证", body.append("<button class=\"btn\" type=\"submit\">验证并下载</button></form></main>").toString());
     }
 }

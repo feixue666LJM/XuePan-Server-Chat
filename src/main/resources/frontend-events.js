@@ -24,8 +24,53 @@
       if (page && (page.getElementById("gateScreen") || page.getElementById("webPanVerificationRequired"))) {
         state.webPanPending = true;
         disconnect("网盘验证已失效，请重新连接并验证");
+        return;
       }
+      bindWebPanBatchDownload(page);
+      bindWebPanBatchSelection(page);
     });
+
+    function bindWebPanBatchDownload(page) {
+      if (!page || page.documentElement.dataset.batchDownloadBound === "1") return;
+      const links = Array.from(page.querySelectorAll("a[data-batch-download='1'][download]"));
+      if (!links.length) return;
+      page.documentElement.dataset.batchDownloadBound = "1";
+      // The iframe is sandboxed without script execution. Start each independent
+      // original-file download from the trusted parent page instead of exposing
+      // a second manual-click page to the user.
+      links.forEach((link, index) => {
+        window.setTimeout(() => link.click(), index * 180);
+      });
+      window.setTimeout(() => {
+        if (ui.webPanScreen.hidden || ui.webPanFrame.contentDocument !== page) return;
+        ui.webPanFrame.src = "/webpan/";
+      }, links.length * 180 + 450);
+    }
+
+    function bindWebPanBatchSelection(page) {
+      if (!page) return;
+      const form = page.getElementById("batchForm");
+      const count = page.getElementById("batchCount");
+      const download = page.getElementById("batchDownload");
+      if (!form || !count || !download || form.dataset.selectionBound === "1") return;
+      const limit = Number(form.dataset.batchLimit);
+      const maxFiles = Number.isInteger(limit) && limit > 0 ? limit : 3;
+      const boxes = Array.from(form.querySelectorAll("input[data-batch-file='1']"));
+      const update = () => {
+        const selected = boxes.filter((box) => box.checked);
+        count.textContent = "已选择 " + selected.length + "/" + maxFiles + " 个文件";
+        download.disabled = selected.length === 0;
+      };
+      boxes.forEach((box) => box.addEventListener("change", () => {
+        if (boxes.filter((item) => item.checked).length > maxFiles) box.checked = false;
+        update();
+      }));
+      form.addEventListener("submit", (event) => {
+        if (!boxes.some((box) => box.checked)) event.preventDefault();
+      });
+      form.dataset.selectionBound = "1";
+      update();
+    }
     ui.gamesBackButton.addEventListener("click", leaveGames);
     ui.snakeBackButton.addEventListener("click", leaveSnake);
     ui.snakeRestartButton.addEventListener("click", initSnakeGame);

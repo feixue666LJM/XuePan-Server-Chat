@@ -1,6 +1,6 @@
     "use strict";
 
-    const DEFAULT_CLIENT_VERSION = "3.0.3";
+    const DEFAULT_CLIENT_VERSION = "3.0.4";
     const IMAGE_CHUNK_SIZE = 50000;
     const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
     const IDLE_LIMIT_MS = 60 * 60 * 1000;
