@@ -72,6 +72,7 @@
       update();
     }
     ui.gamesBackButton.addEventListener("click", leaveGames);
+    ui.decryptBackButton.addEventListener("click", leaveDecrypt);
     ui.snakeBackButton.addEventListener("click", leaveSnake);
     ui.snakeRestartButton.addEventListener("click", initSnakeGame);
     ui.clickBackButton.addEventListener("click", leaveClick);

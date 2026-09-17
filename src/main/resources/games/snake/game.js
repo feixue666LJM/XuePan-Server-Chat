@@ -3,7 +3,8 @@
       { id: "snake", name: "贪吃蛇", icon: "🐍", desc: "35 × 35 经典贪吃蛇，吃到食物得分，撞墙或撞到自己结束" },
       { id: "click", name: "点格子", icon: "🔴", desc: "20 × 20 每 0.5 秒随机出现一个红格，3 秒内没点中就结束" },
       { id: "earth", name: "模拟地球", icon: "🌍", desc: "3D 地球 · 大洲/城市人口实时增长，上帝可呼风唤雨降陨石" },
-      { id: "fps", name: "3D射击生存", icon: "🔫", desc: "第一人称射击 · 对抗无限刷新的近战机器人，生存得分" }
+      { id: "fps", name: "3D射击生存", icon: "🔫", desc: "第一人称射击 · 对抗无限刷新的近战机器人，生存得分" },
+      { id: "decrypt", name: "解密（未做完）", icon: "🔎", desc: "点击场景中的高亮区域进行调查，搜集线索并解开谜题（开发中）" }
     ];
 
     const SNAKE_RECORDS_FILE = "game_records.json";
@@ -56,11 +57,23 @@
       showScreen("app");
     }
 
+    function enterDecrypt() {
+      showScreen("decrypt");
+      if (ui.decryptFrame.getAttribute("src") === "about:blank") {
+        ui.decryptFrame.src = "/games/decrypt/game2.0.html";
+      }
+    }
+
+    function leaveDecrypt() {
+      showScreen("games");
+    }
+
     function enterGame(id) {
       if (id === "snake") enterSnake();
       else if (id === "click") enterClick();
       else if (id === "earth") enterEarth();
       else if (id === "fps") enterFps();
+      else if (id === "decrypt") enterDecrypt();
     }
 
     function enterSnake() {

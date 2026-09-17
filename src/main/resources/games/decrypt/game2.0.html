@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>时空悖论 · 全七章</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #05050a; color: #e0e0e0;
+    font-family: "Microsoft YaHei", sans-serif;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 100vh; overflow: hidden;
+  }
+  #game-container {
+    position: relative; width: 100vw; height: 100vh;
+    max-width: 960px; max-height: 620px;
+    background: #111; border-radius: 12px; overflow: hidden;
+    box-shadow: 0 0 60px rgba(0,0,0,0.9);
+    user-select: none;
+  }
+  @media (max-width: 960px) { #game-container { border-radius: 0; max-height: none; height: 100vh; } }
+  #scene-layer { position: absolute; inset: 0; transition: opacity 0.4s ease; }
+  #scene-bg {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+    transition: background 0.6s ease, filter 0.6s ease;
+  }
+  #scene-layer.camera-view #scene-bg {
+    filter: contrast(1.2) brightness(0.78) sepia(0.2) hue-rotate(-15deg);
+  }
+  #scene-layer.camera-view::after {
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at center, transparent 52%, rgba(0,0,0,0.9) 100%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0 1px, transparent 1px 3px);
+    pointer-events: none; z-index: 2;
+  }
+  #scene-layer.camera-view::before {
+    content: ""; position: absolute;
+    top: 24px; left: 24px; right: 24px; bottom: 24px;
+    border: 1px solid rgba(255,255,255,0.22);
+    z-index: 3; pointer-events: none;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to bottom, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to left, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to bottom, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to right, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to top, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to left, rgba(255,255,255,0.55) 20px, transparent 20px),
+      linear-gradient(to top, rgba(255,255,255,0.55) 20px, transparent 20px);
+    background-position:
+      top left, top left, top right, top right,
+      bottom left, bottom left, bottom right, bottom right;
+    background-size: 20px 2px, 2px 20px, 20px 2px, 2px 20px, 20px 2px, 2px 20px, 20px 2px, 2px 20px;
+    background-repeat: no-repeat;
+  }
+  #scene-layer.red-view #scene-bg { filter: hue-rotate(-30deg) saturate(1.6) brightness(0.75); }
+  .hotspot {
+    position: absolute;
+    border: 2px solid rgba(255,255,255,0.18);
+    border-radius: 6px; cursor: pointer;
+    transition: all 0.2s;
+    background: rgba(255,255,255,0.04);
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(255,255,255,0.55); font-size: 12px;
+    text-shadow: 0 0 6px #000; z-index: 4;
+  }
+  .hotspot:hover {
+    border-color: #ffcc44; background: rgba(255,204,68,0.15);
+    box-shadow: 0 0 16px rgba(255,204,68,0.5); color: #ffcc44;
+  }
+  .hotspot.use-mode { border-color: rgba(102,204,255,0.5); }
+  .hotspot.use-mode:hover {
+    border-color: #66ccff; background: rgba(102,204,255,0.18);
+    box-shadow: 0 0 16px rgba(102,204,255,0.55); color: #66ccff;
+  }
+  #inventory {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 78px;
+    background: rgba(8,8,12,0.94); border-top: 1px solid #333;
+    display: flex; align-items: center; padding: 0 14px; gap: 12px;
+    overflow-x: auto; z-index: 10; backdrop-filter: blur(8px);
+  }
+  .item-slot {
+    width: 54px; height: 54px; flex-shrink: 0;
+    border: 1px solid #444; border-radius: 10px; background: #1a1a1e;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; cursor: pointer; transition: all 0.2s; position: relative;
+  }
+  .item-slot:hover { border-color: #888; background: #222; transform: translateY(-2px); }
+  .item-slot.selected {
+    border-color: #ffcc44; box-shadow: 0 0 14px rgba(255,204,68,0.6);
+    background: #2a2a1e; transform: translateY(-4px);
+  }
+  .item-slot .item-name {
+    position: absolute; bottom: -16px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: #aaa; white-space: nowrap;
+  }
+  #dialog-box {
+    position: absolute; bottom: 96px; left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    width: 84%; max-width: 640px;
+    background: rgba(0,0,0,0.9); border: 1px solid #555; border-radius: 10px;
+    padding: 16px 22px; color: #eee; font-size: 15px; line-height: 1.7;
+    opacity: 0; pointer-events: none; transition: all 0.3s;
+    z-index: 20; text-align: center; white-space: pre-wrap;
+  }
+  #dialog-box.show {
+    opacity: 1; transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+  }
+  #password-modal {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.88);
+    display: none; align-items: center; justify-content: center;
+    z-index: 30; backdrop-filter: blur(6px);
+  }
+  #password-modal.show { display: flex; }
+  .password-box {
+    background: #1e1e24; border: 1px solid #555; border-radius: 14px;
+    padding: 32px 28px; width: 340px; text-align: center;
+    box-shadow: 0 0 40px rgba(0,0,0,0.9);
+  }
+  .password-box h3 { margin-bottom: 20px; font-size: 18px; color: #ffcc44; letter-spacing: 1px; }
+  .password-box input {
+    width: 100%; padding: 12px; font-size: 26px; text-align: center;
+    letter-spacing: 8px; background: #0a0a0c; border: 1px solid #444;
+    border-radius: 10px; color: #fff; outline: none; transition: border-color 0.2s;
+  }
+  .password-box input:focus { border-color: #ffcc44; }
+  #password-time { display: none; align-items: center; justify-content: center; gap: 10px; }
+  #password-time input { width: 90px; letter-spacing: 4px; font-size: 28px; }
+  #password-time .colon {
+    font-size: 32px; color: #ffcc44; font-weight: bold;
+    animation: colonBlink 1.2s infinite;
+  }
+  @keyframes colonBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.3; } }
+  .password-box .btns { display: flex; gap: 12px; margin-top: 22px; }
+  .password-box button {
+    flex: 1; padding: 11px; border: none; border-radius: 8px;
+    font-size: 15px; cursor: pointer; transition: all 0.2s;
+  }
+  .password-box .confirm { background: #ffcc44; color: #111; font-weight: bold; }
+  .password-box .confirm:hover { background: #ffdd66; }
+  .password-box .cancel { background: #333; color: #ccc; }
+  .password-box .cancel:hover { background: #444; }
+  #hint {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.55); color: #aaa; padding: 6px 18px;
+    border-radius: 20px; font-size: 12px; z-index: 15; pointer-events: none;
+    border: 1px solid rgba(255,255,255,0.08); max-width: 80%; text-align: center;
+  }
+  #story-overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.9);
+    display: none; align-items: center; justify-content: center;
+    z-index: 40; padding: 40px;
+  }
+  #story-overlay.show { display: flex; }
+  #story-text {
+    font-size: 20px; color: #e8e8e8; text-align: center; line-height: 1.85;
+    max-width: 640px; letter-spacing: 1px;
+    text-shadow: 0 0 20px rgba(255,255,255,0.15);
+    animation: storyFade 0.6s ease; white-space: pre-wrap;
+  }
+  @keyframes storyFade {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  #camera-exit-btn {
+    position: absolute; bottom: 96px; right: 24px; z-index: 25;
+    background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.4);
+    color: #fff; padding: 10px 18px; border-radius: 8px;
+    font-size: 14px; cursor: pointer; display: none; letter-spacing: 1px;
+  }
+  #camera-exit-btn.show { display: block; }
+  #camera-exit-btn:hover { background: rgba(255,255,255,0.15); }
+  #chapter-overlay {
+    position: absolute; inset: 0; background: #000;
+    display: none; align-items: center; justify-content: center;
+    z-index: 50; opacity: 0; transition: opacity 0.8s ease;
+  }
+  #chapter-overlay.show { display: flex; opacity: 1; }
+  #chapter-overlay.fade-out { opacity: 0; }
+  #chapter-title {
+    font-size: 34px; letter-spacing: 6px; color: #d8d8d8; text-align: center;
+    text-shadow: 0 0 30px rgba(255,204,68,0.25);
+    animation: chapterFade 2s ease;
+  }
+  #chapter-sub {
+    font-size: 14px; letter-spacing: 4px; color: #666;
+    margin-top: 18px; text-align: center;
+  }
+  @keyframes chapterFade {
+    0% { opacity: 0; letter-spacing: 18px; }
+    100% { opacity: 1; letter-spacing: 6px; }
+  }
+</style>
+</head>
+<body>
+<div id="game-container">
+  <div id="scene-layer"><div id="scene-bg"></div></div>
+  <div id="inventory"></div>
+  <div id="dialog-box"></div>
+  <button id="camera-exit-btn">📷 放下相机</button>
+  <div id="story-overlay"><div id="story-text"></div></div>
+  <div id="chapter-overlay"><div><div id="chapter-title"></div><div id="chapter-sub"></div></div></div>
+  <div id="password-modal">
+    <div class="password-box">
+      <h3 id="password-title">请输入密码</h3>
+      <div id="password-simple"><input type="text" id="password-input" maxlength="8" autocomplete="off"></div>
+      <div id="password-time">
+        <input type="text" id="time-hour" maxlength="2" inputmode="numeric" autocomplete="off" placeholder="HH">
+        <span class="colon">:</span>
+        <input type="text" id="time-minute" maxlength="2" inputmode="numeric" autocomplete="off" placeholder="MM">
+      </div>
+      <div class="btns">
+        <button class="cancel" id="password-cancel">取消</button>
+        <button class="confirm" id="password-confirm">确认</button>
+      </div>
+    </div>
+  </div>
+  <div id="hint">点击场景中的高亮区域进行调查</div>
+</div>
+
+<script>
+/* ============================================================
+ *  时空悖论 · 第一章至第七章
+ * ============================================================ */
+
+const gameData = {
+  startScene: 'office',
+
+  chapters: {
+    1: { title: '第一章', sub: '时间悖论' },
+    2: { title: '第二章', sub: '时空钟' },
+    3: { title: '第三章', sub: '悖论加深' },
+    4: { title: '第四章', sub: '出口' },
+    5: { title: '第五章', sub: '到底这是我，还是那是我' },
+    6: { title: '第六章', sub: '自我悖论' },
+    7: { title: '第七章', sub: '这位大师是什么人' }
+  },
+
+  scenes: {
+
+    /* ============ 第一章 ============ */
+    office: {
+      name: '私人办公室', chapter: 1,
+      background: 'radial-gradient(circle at 30% 45%, #1c1712, #050403)',
+      onEnter: () => {
+        if (!state.flags.ch1Intro) {
+          state.flags.ch1Intro = true;
+          showStory('你猛地睁开眼睛。\n头痛欲裂。\n\n这是你的私人办公室，\n可你记得……自己明明应该\n在实验室里值班。', 4200, null);
+        }
+      },
+      hotspots: [
+        { id: 'desk', name: '办公桌', rect: { left: 12, top: 55, width: 34, height: 22 },
+          onClick: () => {
+            if (!state.flags.hasClock) {
+              state.flags.hasClock = true;
+              addItem('clock');
+              showDialog('桌上放着一个金属闹钟，冷得刺骨。\n\n指针停在 08:12——\n像是被人刻意停在那里。\n\n这是……特尼斯公司的「时间钟」？');
+            } else {
+              showDialog('桌上只剩下摊开的实验日志。\n上面写着一句被划掉的话：\n「不可更改。不可更替。不可言语。」');
+            }
+            return true;
+          }
+        },
+        { id: 'drawer', name: '抽屉', rect: { left: 54, top: 68, width: 20, height: 12 },
+          onClick: () => {
+            if (state.flags.drawerUnlocked) { showDialog('抽屉里空了，只剩一个空的相框。'); return true; }
+            if (!state.flags.hasClock) {
+              showDialog('锁是四位数字的密码盘。\n\n不知道密码……\n房间里或许有线索。');
+              return true;
+            }
+            showPasswordLock('抽屉上的密码锁（四位数字）', '0812', () => {
+              state.flags.drawerUnlocked = true;
+              showDialog('咔嚓——\n\n抽屉打开，里面有一把铜钥匙，\n和一张烧毁了一半的合影。');
+              addItem('key'); addItem('photo');
+            });
+            return true;
+          }
+        },
+        { id: 'board', name: '公告板', rect: { left: 74, top: 24, width: 22, height: 22 },
+          onClick: () => {
+            if (!state.flags.readBoard) {
+              state.flags.readBoard = true;
+              showStory('公告板上贴着几张纸：\n\n【剪报】\n「特尼斯公司发布「时空钟」样机，\n称其为"人类观察历史的第一只眼睛"。\n使用者将以"观察者"身份进入过去，\n持续 60 万毫秒后强制返回。」\n\n【值班表】\nL. Levis    08:12 — 17:30\nH. Grey     17:30 — 次日 08:12', 6200, null);
+            } else { showDialog('值班表的日期是一个月前。\n正好是利维斯出事的那一周。'); }
+            return true;
+          }
+        },
+        { id: 'door', name: '办公室门', rect: { left: 84, top: 40, width: 14, height: 46 },
+          onClick: () => {
+            if (state.inventory.includes('key')) {
+              showDialog('你用铜钥匙打开了门。\n走廊的灯在闪。');
+              setTimeout(() => changeScene('corridorA'), 1000);
+            } else { showDialog('门被从外面锁上了。\n需要一把钥匙。'); }
+            return true;
+          }
+        }
+      ]
+    },
+
+    corridorA: {
+      name: '走廊 A', chapter: 1,
+      background: 'linear-gradient(180deg, #0d0d10 0%, #15151a 60%, #0a0a0d 100%)',
+      hotspots: [
+        { id: 'backOffice', name: '返回办公室', rect: { left: 3, top: 80, width: 16, height: 12 },
+          onClick: () => { changeScene('office'); return true; } },
+        { id: 'obsWindow', name: '观察窗', rect: { left: 26, top: 34, width: 22, height: 22 },
+          onClick: () => { showStory('你透过玻璃看向主实验室：\n\n液压机静静地悬在半空，\n工作台上散落着工具。\n\n一切如常——\n但你就是觉得哪里不对。', 3600, null); return true; } },
+        { id: 'labDoor', name: '实验室门', rect: { left: 56, top: 34, width: 18, height: 46 },
+          onClick: () => { showDialog('你推开了实验室的门。'); setTimeout(() => changeScene('labMain'), 800); return true; } },
+        { id: 'vending', name: '售货机', rect: { left: 78, top: 56, width: 12, height: 26 },
+          onClick: () => { showDialog('售货机还在亮着，\n玻璃上映出你自己的脸——\n疲惫，苍白，像是好几天没睡。'); return true; } }
+      ]
+    },
+
+    labMain: {
+      name: '主实验室', chapter: 1,
+      background: 'radial-gradient(circle at 50% 50%, #17171c, #050507)',
+      onEnter: () => {
+        if (!state.flags.ch1LabIntro) {
+          state.flags.ch1LabIntro = true;
+          showStory('液压机安静地悬在半空。\n\n地面被清理得很干净，\n但你依然能闻到\n淡淡的铁锈味。', 4000, null);
+        }
+      },
+      hotspots: [
+        { id: 'backCorridor', name: '返回走廊', rect: { left: 3, top: 80, width: 16, height: 12 },
+          onClick: () => { changeScene('corridorA'); return true; } },
+        { id: 'press', name: '液压机', rect: { left: 30, top: 30, width: 28, height: 34 },
+          onClick: () => {
+            if (!state.flags.sawPress) {
+              state.flags.sawPress = true;
+              showStory('你靠近液压机。\n\n金属底座上，有一道洗不掉的暗红色印记。\n\n你想起一个月前那个下午——\n利维斯被压成一张薄薄的、\n几乎透明的人饼。', 5000, null);
+            } else { showDialog('你不敢再看那道印记。'); }
+            return true;
+          } },
+        { id: 'workbench', name: '工具台', rect: { left: 62, top: 58, width: 26, height: 18 },
+          onClick: () => {
+            if (!state.flags.gotSaw) {
+              state.flags.gotSaw = true;
+              addItem('juzi1');
+              showDialog('工具台上放着一把生锈的锯子。\n你把它放进了口袋。');
+            } else { showDialog('工具台上只剩下些零散螺丝。'); }
+            return true;
+          } },
+        { id: 'levisDesk', name: '利维斯的工位', rect: { left: 14, top: 52, width: 16, height: 22 },
+          onClick: () => {
+            if (!state.flags.readLevis) {
+              state.flags.readLevis = true;
+              showStory('利维斯的工位还保持着他离开时的样子。\n\n桌上的便签上写着一行字：\n\n「灰叔，如果实验出问题，\n请一定不要回头。——L」\n\n你握紧了那把锯子。', 5000, null);
+            } else { showDialog('便签上墨迹已经干了。'); }
+            return true;
+          } },
+        { id: 'nextDoor', name: '里间的门', rect: { left: 84, top: 36, width: 14, height: 48 },
+          onClick: () => {
+            if (!state.flags.gotSaw) { showDialog('门把手上沾着一层灰。\n你直觉先进工具台看看更稳妥。'); return true; }
+            showStory('你推开了里间的门……\n空气一下子变了。', 2200, () => { changeScene('corridorB'); });
+            return true;
+          } }
+      ]
+    },
+
+    /* ============ 第二章 ============ */
+    corridorB: {
+      name: '走廊 B', chapter: 2,
+      background: 'linear-gradient(180deg, #0a0d12 0%, #131822 60%, #05070a 100%)',
+      onEnter: () => {
+        if (!state.flags.ch2Intro) {
+          state.flags.ch2Intro = true;
+          showChapter(2, () => {
+            showStory('走廊尽头，是一扇半掩的门。\n\n门缝里透出的光\n忽明忽暗。', 3600, null);
+          });
+        }
+      },
+      hotspots: [
+        { id: 'backLab', name: '返回主实验室', rect: { left: 3, top: 80, width: 16, height: 12 },
+          onClick: () => { changeScene('labMain'); return true; } },
+        { id: 'windowB', name: '走廊窗', rect: { left: 30, top: 24, width: 24, height: 26 },
+          onClick: () => { showStory('窗外一片漆黑。\n不是夜——是那种「什么都没有」的漆黑。\n\n你往下看，深不见底。\n抬头，头顶似乎还有一层……', 4200, null); return true; } },
+        { id: 'sideDoor', name: '半掩的门', rect: { left: 62, top: 32, width: 20, height: 48 },
+          onClick: () => { showDialog('你推门走了进去。'); setTimeout(() => changeScene('labSide'), 800); return true; } }
+      ]
+    },
+
+    labSide: {
+      name: '侧实验室', chapter: 2,
+      background: 'radial-gradient(circle at 60% 40%, #1c1a28, #05050a)',
+      cameraBackground: 'radial-gradient(circle at 60% 40%, #12261c, #030806)',
+      onEnter: () => {
+        if (!state.flags.ch2SideIntro) {
+          state.flags.ch2SideIntro = true;
+          showStory('你走进这个房间。\n\n正中站着一个……模特假人？\n不，它太逼真了。\n\n窗外漆黑如墨，\n窗外深不见底。', 4400, null);
+        }
+      },
+      hotspots: [
+        { id: 'backCorridorB', name: '返回走廊', rect: { left: 3, top: 82, width: 16, height: 11 },
+          visible: () => !state.flags.cameraView && !state.flags.mannequinStuck,
+          onClick: () => { changeScene('corridorB'); return true; } },
+        { id: 'window', name: '窗户', rect: { left: 38, top: 16, width: 26, height: 32 },
+          visible: () => !state.flags.cameraView,
+          onClick: () => {
+            if (state.flags.mannequinStuck) { showDialog('假人的身体死死卡在窗框里，\n一动不动。'); return true; }
+            if (state.selectedItem === 'hand') {
+              removeItem('hand'); state.selectedItem = null;
+              state.flags.handThrown = true; renderInventory(); playMannequinStory(); return true;
+            }
+            if (state.flags.handThrown) { showDialog('窗外漆黑一片。手已经扔下去了。'); return true; }
+            showStory('你趴在窗沿往下看。\n\n深不见底。\n\n风从下面吹上来，\n带着一股说不出的腥味。', 3600, null);
+            return true;
+          } },
+        { id: 'table', name: '桌子', rect: { left: 8, top: 62, width: 22, height: 15 },
+          visible: () => !state.flags.cameraView,
+          onClick: () => { showDialog('桌子上什么都没有，\n只有一层很厚的灰。'); return true; } },
+        { id: 'flowerpot', name: '花盆', rect: { left: 30, top: 72, width: 14, height: 12 },
+          visible: () => !state.flags.cameraView,
+          onClick: () => {
+            if (state.flags.hasCamera) { showDialog('花盆里已经什么都没有了。'); return true; }
+            if (state.selectedItem === 'hand') {
+              state.selectedItem = null; state.flags.hasCamera = true;
+              showDialog('你用手挖开花盆里的泥土，\n指尖碰到一个冰凉坚硬的东西——\n\n是一台老式相机。');
+              addItem('camera'); renderInventory(); return true;
+            }
+            showDialog('泥土结得很硬，徒手挖不动。\n需要用什么东西来挖……');
+            return true;
+          } },
+        { id: 'mannequin', name: '模特假人',
+          rect: () => state.flags.mannequinStuck
+            ? { left: 40, top: 20, width: 22, height: 28 }
+            : { left: 62, top: 40, width: 16, height: 44 },
+          visible: () => !state.flags.cameraView,
+          onClick: () => {
+            if (state.flags.mannequinStuck) {
+              showStory('你踩着假人冰冷的身体，\n从窗户钻了上去……', 1800, () => { changeScene('attic'); });
+              return true;
+            }
+            if (state.selectedItem === 'juzi1') {
+              if (state.flags.handSawn) { showDialog('假人已经没有手可以锯了。'); }
+              else {
+                state.selectedItem = null; state.flags.handSawn = true;
+                showDialog('你举起了锯子……\n咔嚓——\n假人的右手掉了下来。\n\n触感……不像塑料。');
+                addItem('hand'); renderInventory();
+              }
+              return true;
+            }
+            if (state.flags.handSawn) { showDialog('假人失去了右手，静静地站着。\n\n它的头……好像偏过来了一点。'); return true; }
+            showDialog('一个老旧的模特假人。\n它的右臂似乎可以活动。');
+            return true;
+          } },
+        { id: 'painting', name: '一幅画', rect: { left: 30, top: 12, width: 22, height: 26 },
+          visible: () => state.flags.cameraView,
+          onClick: () => {
+            state.flags.sawPainting = true;
+            showStory('你举起相机对准那面墙。\n\n——墙上多出了一幅画。\n\n画上写着：\n\n8:50 - 9', 4200, null);
+            return true;
+          } }
+      ]
+    },
+
+    /* ============ 第三章 ============ */
+    attic: {
+      name: '阁楼', chapter: 3,
+      background: 'radial-gradient(circle at 50% 45%, #16161c, #030304)',
+      onEnter: () => {
+        if (!state.flags.ch3Intro) {
+          state.flags.ch3Intro = true;
+          showChapter(3, () => {
+            showStory('你从窗户爬了上来。\n\n这里……比从外面看到的\n要大得多。\n\n仿佛整栋楼都在往这里\n倾泻空间。', 4400, null);
+          });
+        }
+      },
+      hotspots: [
+        { id: 'backSide', name: '回到下方', rect: { left: 3, top: 82, width: 16, height: 11 },
+          onClick: () => { showDialog('往下看——窗户已经不见了。\n只有一片黑暗。'); return true; } },
+        { id: 'ironDoor', name: '铁门', rect: { left: 38, top: 28, width: 24, height: 52 },
+          onClick: () => {
+            if (state.flags.door3Opened) { showDialog('门已经打开了。'); return true; }
+            showPasswordLock('铁门上的时间锁', '23:50', () => {
+              state.flags.door3Opened = true;
+              showStory('咔哒——\n\n门后是一条漫长的走廊。\n你看到了 201、202、203……\n\n走廊尽头，站立着一个\n和你长得一模一样的影子。', 5200, () => { changeScene('cycleCorridor'); });
+            }, { type: 'time' });
+            return true;
+          } },
+        { id: 'atticWindow', name: '阁楼小窗', rect: { left: 70, top: 40, width: 18, height: 22 },
+          onClick: () => { showStory('你透过小窗往外看。\n\n窗外没有城市。\n没有天空。\n\n只有一条长长的、\n无限延伸的走廊——\n和你脚下这条一模一样。', 4600, null); return true; } }
+      ]
+    },
+
+    cycleCorridor: {
+      name: '循环走廊', chapter: 3,
+      background: 'linear-gradient(180deg, #0a0a0f 0%, #15151c 50%, #05050a 100%)',
+      onEnter: () => {
+        if (!state.flags.ch3Corridor) {
+          state.flags.ch3Corridor = true;
+          showStory('你走进走廊。\n\n门牌号从 201 一直排到 208。\n\n你数了一遍。\n\n再数一遍。\n\n——还是 8 个。\n\n可你总觉得……\n少了一个。', 5200, null);
+        }
+      },
+      hotspots: [
+        { id: 'backAttic', name: '回到阁楼', rect: { left: 3, top: 82, width: 16, height: 11 },
+          onClick: () => { changeScene('attic'); return true; } },
+        { id: 'door207', name: '207 房间', rect: { left: 28, top: 32, width: 14, height: 44 },
+          onClick: () => {
+            showDialog('门把手上缠着一层新鲜的、\n黏腻的东西。\n\n你鼓起勇气推开了门……');
+            setTimeout(() => changeScene('room207'), 900);
+            return true;
+          } },
+        { id: 'door208', name: '208 房间', rect: { left: 60, top: 32, width: 14, height: 44 },
+          onClick: () => {
+            showDialog('门缝里渗出暗红色的液体。\n\n你推开了它……');
+            setTimeout(() => changeScene('room208'), 900);
+            return true;
+          } },
+        { id: 'mirrorShadow', name: '走廊尽头', rect: { left: 84, top: 30, width: 12, height: 44 },
+          onClick: () => { showDialog('走廊尽头，那个影子\n缓缓地转过了头……\n\n你不敢再看他。'); return true; } }
+      ]
+    },
+
+    /* ============ 第四章 ============ */
+    room207: {
+      name: '207 房间', chapter: 4,
+      background: 'radial-gradient(circle at 50% 60%, #1a1416, #050203)',
+      onEnter: () => {
+        if (!state.flags.ch4Intro) {
+          state.flags.ch4Intro = true;
+          showChapter(4, () => {
+            showStory('207 房间。\n\n这里和你自己的实验室一模一样。\n\n液压机悬在半空，\n底下……躺着一个人。', 4200, null);
+          });
+        }
+      },
+      hotspots: [
+        { id: 'back207', name: '回到走廊', rect: { left: 3, top: 82, width: 16, height: 11 },
+          onClick: () => { changeScene('cycleCorridor'); return true; } },
+        { id: 'body207', name: '液压机下的尸体', rect: { left: 30, top: 55, width: 26, height: 22 },
+          onClick: () => {
+            if (!state.flags.sawBody207) {
+              state.flags.sawBody207 = true;
+              showStory('你走过去。\n\n尸体的头骨已经碎得不成样子——\n是利维斯。\n\n液压机是抬起来的。\n他死了，却没有被压。', 5000, null);
+            } else if (!state.flags.boneMovedIn207) {
+              showDialog('你抓住尸体的手，\n把它往旁边挪了一米。');
+              state.flags.boneMovedIn207 = true;
+              showStory('就在这一瞬间——\n\n你感到整个房间\n似乎颤动了一下。', 2800, null);
+            } else {
+              showDialog('尸体已经挪到旁边了。');
+            }
+            return true;
+          } },
+        { id: 'wall207', name: '内侧墙壁', rect: { left: 62, top: 30, width: 22, height: 34 },
+          onClick: () => {
+            if (state.flags.boneMovedIn207) {
+              showDialog('墙壁上浮现出一道\n你从未见过的暗门。\n\n（它似乎……只在挪动尸体后才存在）');
+              state.flags.wall207Opened = true;
+            } else {
+              showDialog('普通的墙壁，什么也没有。');
+            }
+            return true;
+          } }
+      ]
+    },
+
+    room208: {
+      name: '208 房间', chapter: 4,
+      background: 'radial-gradient(circle at 50% 60%, #1f0d0d, #060101)',
+      onEnter: () => {
+        if (!state.flags.ch4Room208Intro) {
+          state.flags.ch4Room208Intro = true;
+          showStory('你踏进 208。\n\n……\n\n这里和你自己的实验室\n完全不同。\n\n满地碎肉与暗红。\n各种机关和刀片悬在头顶。\n\n房间最深处，有一扇门。', 5200, null);
+        }
+      },
+      hotspots: [
+        { id: 'back208', name: '回到走廊', rect: { left: 3, top: 82, width: 16, height: 11 },
+          onClick: () => { changeScene('cycleCorridor'); return true; } },
+        { id: 'bone208', name: '骸骨', rect: { left: 32, top: 60, width: 20, height: 18 },
+          onClick: () => {
+            if (!state.flags.boneMoved208) {
+              state.flags.boneMoved208 = true;
+              showStory('你伸手把骸骨挪到旁边一米。\n\n——几乎同时，\n你听见隔壁房间\n有什么东西也在移动。', 3600, null);
+            } else {
+              showDialog('骸骨已经挪开了。');
+            }
+            return true;
+          } },
+        { id: 'trapZone', name: '机关区', rect: { left: 54, top: 44, width: 24, height: 30 },
+          onClick: () => {
+            if (state.flags.wall207Opened && state.flags.boneMoved208) {
+              if (!state.flags.trapTriggered) {
+                state.flags.trapTriggered = true;
+                showStory('随着 207 房间骸骨的挪动，\n\n208 房间所有的机关\n同时启动了——\n\n碎肉与石块从头顶倾泻，\n你贴着地面爬了过去。', 4800, () => {
+                  state.flags.path208Cleared = true;
+                  renderHotspots();
+                });
+              } else {
+                showDialog('机关已经全部触发了。\n前面的路通了。');
+              }
+            } else {
+              showDialog('机关密布。\n\n必须先做点什么，\n让它们自己先动起来……');
+            }
+            return true;
+          } },
+        { id: 'deepDoor', name: '最深处的门',
+          rect: { left: 80, top: 40, width: 14, height: 44 },
+          visible: () => state.flags.path208Cleared,
+          onClick: () => {
+            showStory('你推开最深处的门。\n\n门后是一条走廊——\n\n一左一右，\n上或下。', 3200, () => {
+              changeScene('escapeHall');
+            });
+            return true;
+          } }
+      ]
+    },
+
+    escapeHall: {
+      name: '出口走廊', chapter: 4,
+      background: 'linear-gradient(180deg, #0b0b10 0%, #16161e 50%, #05050a 100%)',
+      hotspots: [
+        { id: 'goDown', name: '向下走', rect: { left: 22, top: 60, width: 22, height: 22 },
+          onClick: () => { showDialog('你往下走。\n\n——却发现自己的脚\n又踩回原地。\n\n下行的路不存在。'); return true; } },
+        { id: 'goUp', name: '向上走', rect: { left: 56, top: 30, width: 22, height: 26 },
+          onClick: () => {
+            showStory('你抬头。\n\n……你还是往上走了。', 2400, () => {
+              // 传送回实验室
+              showStory('一阵奇怪的声音传来，\n夹杂着尖叫、怒吼——\n\n天旋地转。', 3600, () => {
+                state.flags.ch4EscapeDone = true;
+                // 直接回到 labMain，并触发朋友来电
+                changeScene('homeLab');
+              });
+            });
+            return true;
+          } }
+      ]
+    },
+
+    /* ============ 第五章 ============ */
+    homeLab: {
+      name: '家中实验室', chapter: 5,
+      background: 'radial-gradient(circle at 50% 50%, #1c1b22, #07070a)',
+      onEnter: () => {
+        if (!state.flags.ch5Intro) {
+          state.flags.ch5Intro = true;
+          showChapter(5, () => {
+            showStory('你醒来。\n\n手里……握着时间钟。\n\n你把它放在桌上，\n退后几步——\n像是那东西会咬人。\n\n电话响了。', 4400, () => {
+              // 朋友来电
+              showStory('「灰叔？我是艾维特塔斯。\n\n今天有个疯狂科学家的实验室\n被找到了，\n\n一起去看看？」', 4600, () => {
+                showStory('你答应了他。\n\n但出门前，\n\n你想再试一次\n时间钟。', 3200, null);
+              });
+            });
+          });
+        }
+      },
+      hotspots: [
+        { id: 'clockOnDesk', name: '时间钟', rect: { left: 30, top: 40, width: 20, height: 20 },
+          onClick: () => {
+            if (state.flags.ch5UsedClock) {
+              showDialog('时间钟已经冷却。\n指针在微微发抖。');
+              return true;
+            }
+            showStory('你把时间往前拨了\n一个月零四天。\n\n——利维斯出事前的\n一小时。\n\n你按下按钮。', 4200, () => {
+              state.flags.ch5UsedClock = true;
+              changeScene('pastScene');
+            });
+            return true;
+          } },
+        { id: 'phone', name: '手机', rect: { left: 62, top: 62, width: 14, height: 14 },
+          onClick: () => { showDialog('来电记录显示：\n艾维特塔斯。\n\n时间：刚刚。'); return true; } }
+      ]
+    },
+
+    pastScene: {
+      name: '一个月零四天前', chapter: 5,
+      background: 'radial-gradient(circle at 50% 40%, #241c17, #080605)',
+      onEnter: () => {
+        if (!state.flags.ch5PastIntro) {
+          state.flags.ch5PastIntro = true;
+          showStory('你落在了走廊里。\n\n——这次不一样。\n\n你不再是观察者。\n你的手，能碰到东西。', 4000, null);
+        }
+      },
+      hotspots: [
+        // ---- 205 门：纯氛围/提示 ----
+        {
+          id: 'door205', name: '205 门',
+          rect: { left: 8, top: 40, width: 14, height: 40 },
+          onClick: () => {
+            if (state.flags.ch5PastDone) {
+              showDialog('205 的门依然打不开。\n\n你只能往前走——\n往 207 那边。');
+            } else {
+              showDialog('门上没有把手。\n只有一道很细的裂缝，\n像是从里面被撬开过。');
+            }
+            return true;
+          }
+        },
+        // ---- 207 门：触发躲藏剧情 → 剧情完成后变成通往第六章的出口 ----
+        {
+          id: 'door207p', name: '207 门',
+          rect: { left: 30, top: 36, width: 16, height: 46 },
+          onClick: () => {
+
+            // 状态 C：剧情已经全部看完 → 208 门口浮现新的门，进入第六章
+            if (state.flags.ch5PastDone) {
+              showStory(
+                '你走出了 207 门。\n\n' +
+                '走廊尽头——\n\n' +
+                '一道从未见过的门\n缓缓浮现。',
+                3400,
+                () => { changeScene('corridor6'); }
+              );
+              return true;
+            }
+
+            // 状态 B：剧情正在播放中（busy 会拦截，这里是兜底）
+            if (state.flags.ch5Hiding) {
+              showDialog('走廊安静得像什么都没发生过……\n\n刚才那个身影……是谁？');
+              return true;
+            }
+
+            // 状态 A：首次点击 → 躲藏 + 播放完整剧情
+            state.flags.ch5Hiding = true;
+            showDialog('你躲到 207 门后。\n\n远处传来脚步声……');
+
+            setTimeout(() => {
+              showStory(
+                '门开了。\n\n' +
+                '一个身影走进来。\n\n' +
+                '你偷偷开了一条缝——\n\n' +
+                '那个背影，\n非常熟悉。\n\n' +
+                '但你想不起是谁。',
+                4800,
+                () => {
+                  showStory(
+                    '那人似乎察觉到了什么。\n\n' +
+                    '猛地回头。\n\n' +
+                    '——他和你对视了。\n\n' +
+                    '你急忙关上门。',
+                    4200,
+                    () => {
+                      showStory(
+                        '开始砸门。\n\n' +
+                        '「……！！」\n\n' +
+                        '他在说着你听不懂的话。\n\n' +
+                        '砸了很久。\n\n' +
+                        '然后是一声惨叫。\n\n' +
+                        '归于平静。',
+                        5600,
+                        () => {
+                          state.flags.ch5PastDone = true;
+                          showDialog(
+                            '你重新拉开 207 的门——\n\n' +
+                            '外面什么都没有。\n\n' +
+                            '只有走廊的尽头，\n似乎多了些什么。',
+                            3800
+                          );
+                        }
+                      );
+                    }
+                  );
+                }
+              );
+            }, 1200);
+
+            return true;
+          }
+        }
+      ]
+    },
+
+    /* ============ 第六章 ============ */
+    corridor6: {
+      name: '走廊', chapter: 6,
+      background: 'linear-gradient(180deg, #090a0d 0%, #14151a 50%, #040507 100%)',
+      onEnter: () => {
+        if (!state.flags.ch6Intro) {
+          state.flags.ch6Intro = true;
+          showChapter(6, () => {
+            showStory('你继续在走廊里探索。\n\n从 201 开始试门——\n\n201，锁。\n202，锁。\n203、204、205，全锁。\n\n只有 206……\n\n开着。', 5200, null);
+          });
+        }
+      },
+      hotspots: [
+        { id: 'door201', name: '201 门', rect: { left: 4, top: 34, width: 11, height: 40 },
+          onClick: () => { showDialog('锁上的。'); return true; } },
+        { id: 'door206', name: '206 门', rect: { left: 42, top: 32, width: 16, height: 46 },
+          onClick: () => {
+            showStory('你推开了 206 的门。\n\n——一阵潮湿的气味\n扑面而来。', 2800, () => { changeScene('room206a'); });
+            return true;
+          } },
+        { id: 'back5', name: '回到走廊 5', rect: { left: 84, top: 82, width: 14, height: 11 },
+          onClick: () => { changeScene('pastScene'); return true; } }
+      ]
+    },
+
+    room206a: {
+      name: '206 · 里', chapter: 6,
+      background: 'radial-gradient(circle at 40% 60%, #0d0a0f, #020103)',
+      onEnter: () => {
+        if (!state.flags.ch6Room206Intro) {
+          state.flags.ch6Room206Intro = true;
+          showStory('你走进 206。\n\n身后的门「啪」地锁死了。\n\n这里非常大。\n\n墙上到处画着看不懂的符号\n和各种通灵仪式的图案。\n\n你感到毛骨悚然。', 5400, null);
+        }
+      },
+      hotspots: [
+        { id: 'curtain', name: '窗帘', rect: { left: 68, top: 24, width: 24, height: 32 },
+          onClick: () => {
+            if (!state.flags.ch6FeltDread) {
+              state.flags.ch6FeltDread = true;
+              showStory('你朝窗户走去。\n\n手快要碰到窗帘的那一刻——\n\n一阵无法言喻的恐惧\n从心底炸开。\n\n直觉告诉你：\n\n拉开它，\n你会看到无法承受的东西。\n\n甚至……被吓死。', 5600, null);
+            } else {
+              showDialog('你的手停在半空。\n\n——还是不敢拉开。');
+            }
+            return true;
+          } },
+        { id: 'oilLamp', name: '油灯', rect: { left: 16, top: 60, width: 12, height: 14 },
+          onClick: () => {
+            if (!state.flags.ch6LampLit) {
+              state.flags.ch6LampLit = true;
+              addItem('lamp');
+              showDialog('你点亮了油灯。\n\n房间亮了一些——\n\n你看清了迷宫般的走廊。');
+            } else {
+              showDialog('油灯在你手里。');
+            }
+            return true;
+          } },
+        { id: 'innerPath', name: '深处的小走廊',
+          rect: { left: 40, top: 60, width: 22, height: 22 },
+          visible: () => state.flags.ch6LampLit,
+          onClick: () => {
+            showStory('你举着油灯\n走进深处的小走廊。\n\n远远的，\n你看到前方有微光。', 3200, () => {
+              changeScene('room206b');
+            });
+            return true;
+          } }
+      ]
+    },
+
+    room206b: {
+      name: '206 · 祭坛', chapter: 6,
+      background: 'radial-gradient(circle at 50% 40%, #180a0a, #030101)',
+      onEnter: () => {
+        if (!state.flags.ch6AltarIntro) {
+          state.flags.ch6AltarIntro = true;
+          showStory('你把油灯吹灭。\n\n——前方有一个人，\n跪在那里。\n\n嘴里说着一些\n完全听不懂的话。', 4600, null);
+        }
+      },
+      hotspots: [
+        { id: 'altar', name: '祭坛', rect: { left: 40, top: 44, width: 22, height: 26 },
+          onClick: () => {
+            if (!state.flags.ch6SawAltar) {
+              state.flags.ch6SawAltar = true;
+              showStory('你从上方走廊绕到正前方。\n\n——祭坛上，\n放着一个头颅被压碎的人。\n\n衣着……和利维斯一模一样。', 5600, () => {
+                showStory('而祭坛前跪着的身影——\n\n缓缓回过了头。\n\n他头顶密密麻麻，\n长满了眼睛。\n\n嘴角裂到耳根，\n满口尖牙。\n\n那是你从没见过的恐怖。', 6200, () => {
+                  showStory('——他看见你了。\n\n他尖叫着冲过来。', 2400, () => {
+                    state.flags.ch6MonsterAwake = true;
+                    // 触发追逐
+                    playChase();
+                  });
+                });
+              });
+            } else {
+              showDialog('祭坛……怪物就在那里。');
+            }
+            return true;
+          } }
+      ]
+    },
+
+    /* ============ 第七章 ============ */
+    chaseScene: {
+      name: '被追逐', chapter: 7,
+      background: 'radial-gradient(circle at 50% 50%, #200a0a, #060101)',
+      onEnter: () => {
+        if (!state.flags.ch7Intro) {
+          state.flags.ch7Intro = true;
+          showChapter(7, () => {
+            showStory('你拼命往回跑——\n\n206 的门是锁的。\n\n你的钥匙……没了。\n\n怪物的脚步声\n越来越近。', 5200, null);
+          });
+        }
+      },
+      hotspots: [
+        { id: 'altarHole', name: '祭坛底部', rect: { left: 40, top: 60, width: 22, height: 20 },
+          onClick: () => {
+            showStory('你跌跌撞撞跑到祭坛前。\n\n怪物就在身后。\n\n你下意识地往前一扑，\n摸到祭坛底部——\n\n那里有一个洞口。\n\n你直接掉了下去。', 5200, () => {
+              changeScene('graveYard');
+            });
+            return true;
+          } }
+      ]
+    },
+
+    graveYard: {
+      name: '坟场', chapter: 7,
+      background: 'radial-gradient(circle at 50% 30%, #0a0f1a, #010203)',
+      onEnter: () => {
+        if (!state.flags.ch7GraveIntro) {
+          state.flags.ch7GraveIntro = true;
+          showStory('你从一块墓碑下爬出来。\n\n夜空里挂着一轮月亮。\n\n四周——\n\n全是坟墓。', 4200, null);
+        }
+      },
+      hotspots: [
+        { id: 'graveOwn', name: '自己爬出的坟', rect: { left: 30, top: 60, width: 22, height: 18 },
+          onClick: () => {
+            if (!state.flags.ch7SawGrave) {
+              state.flags.ch7SawGrave = true;
+              showStory('你回头看自己爬出来的那块碑。\n\n——名字看不清。\n\n无论怎么凑近，\n怎么努力，\n怎么看不清。\n\n可是你在旁边泥土上\n随手写下的小字，\n远远就能看清。', 5400, null);
+            } else {
+              showDialog('碑文依然一片模糊。');
+            }
+            return true;
+          } },
+        { id: 'oldVoice', name: '幼小的声音', rect: { left: 62, top: 44, width: 24, height: 22 },
+          onClick: () => {
+            if (!state.flags.ch7HeardVoice) {
+              state.flags.ch7HeardVoice = true;
+              showStory('「年轻人，\n你不该来这里。\n\n这里会吞噬自我，\n会衍生自我，\n\n你理解不了。」\n\n——一道苍老的声音\n从你身后响起。', 5600, null);
+            } else {
+              showDialog('声音消失了。');
+            }
+            return true;
+          } },
+        { id: 'ghostBaby', name: '朝声音跑去', rect: { left: 30, top: 30, width: 22, height: 22 },
+          onClick: () => {
+            if (!state.flags.ch7GhostBaby) {
+              state.flags.ch7GhostBaby = true;
+              showStory('你朝那个声音冲了过去。\n\n——然后看到了一张\n孩童的脸。\n\n他笑着看你：\n\n「你不该朝我这边跑——\n我这边，才最危险。」\n\n你脚下一空。', 5800, () => {
+                changeScene('backLab');
+              });
+            } else {
+              showDialog('……');
+            }
+            return true;
+          } }
+      ]
+    },
+
+    backLab: {
+      name: '回到实验室', chapter: 7,
+      background: 'radial-gradient(circle at 50% 50%, #1c1b22, #07070a)',
+      onEnter: () => {
+        if (!state.flags.ch7FinalIntro) {
+          state.flags.ch7FinalIntro = true;
+          showStory('你醒了。\n\n——手里抱着时间钟。\n\n你拉开窗帘：\n\n外面，是忙碌的街道。', 4200, () => {
+            showStory('手机响了。\n\n是艾维特塔斯。\n\n「喂？你不是刚到家吗？\n怎么样，晚上要不要\n一起出来喝一杯？」\n\n——你愣住了。', 5600, () => {
+              showStory('「我们……不是刚分开吗？」\n\n你听见自己在问。', 3600, () => {
+                showStory('【 第七章 Demo 结束 】\n\n灰叔的时间悖论\n才刚刚开始……', 4800, null);
+              });
+            });
+          });
+        }
+      },
+      hotspots: []
+    }
+
+  },
+
+  items: {
+    clock:  { name: '时间钟', icon: '⏰', description: '指针停在 08:12。' },
+    key:    { name: '铜钥匙', icon: '🔑', description: '一把老式铜钥匙。' },
+    photo:  { name: '烧毁的合影', icon: '🖼️', description: '只剩下半张——利维斯的脸。' },
+    juzi1:  { name: '锯子', icon: '🪚', description: '生锈的，依然锋利。' },
+    hand:   { name: '假人手', icon: '🖐️', description: '触感……不太像塑料。' },
+    lamp:   { name: '油灯', icon: '🪔', description: '能照亮一点点黑暗。' },
+    camera: {
+      name: '相机', icon: '📷',
+      description: '老式相机。透过它能看到另一个世界。',
+      onUse: () => {
+        const scene = gameData.scenes[state.currentScene];
+        if (!scene.cameraBackground) {
+          showDialog('举起相机……\n这里什么都没有。');
+          return;
+        }
+        state.flags.cameraView = !state.flags.cameraView;
+        state.selectedItem = null;
+        renderInventory();
+        renderHotspots();
+        if (state.flags.cameraView) {
+          showDialog('你举起相机——\n\n透过镜头，\n房间完全变了。');
+        } else {
+          showDialog('你放下了相机。\n\n一切又回到原样。');
+        }
+      }
+    }
+  }
+};
+
+/* ============================================================
+ *  全局状态
+ * ============================================================ */
+const state = {
+  currentScene: gameData.startScene,
+  inventory: [],
+  flags: {},
+  selectedItem: null,
+  isTransitioning: false,
+  busy: false
+};
+
+/* ============================================================
+ *  DOM
+ * ============================================================ */
+const sceneBg        = document.getElementById('scene-bg');
+const sceneLayer     = document.getElementById('scene-layer');
+const inventoryEl    = document.getElementById('inventory');
+const dialogBox      = document.getElementById('dialog-box');
+const passwordModal  = document.getElementById('password-modal');
+const passwordInput  = document.getElementById('password-input');
+const passwordTitle  = document.getElementById('password-title');
+const passwordSimple = document.getElementById('password-simple');
+const passwordTime   = document.getElementById('password-time');
+const timeHour       = document.getElementById('time-hour');
+const timeMinute     = document.getElementById('time-minute');
+const storyOverlay   = document.getElementById('story-overlay');
+const storyText      = document.getElementById('story-text');
+const cameraExitBtn  = document.getElementById('camera-exit-btn');
+const chapterOverlay = document.getElementById('chapter-overlay');
+const chapterTitle   = document.getElementById('chapter-title');
+const chapterSub     = document.getElementById('chapter-sub');
+
+let passwordCallback = null;
+
+/* ============================================================
+ *  场景切换
+ * ============================================================ */
+function changeScene(sceneId) {
+  if (state.isTransitioning) return;
+  const scene = gameData.scenes[sceneId];
+  if (!scene) return;
+
+  state.isTransitioning = true;
+  sceneLayer.style.opacity = '0';
+
+  setTimeout(() => {
+    state.currentScene = sceneId;
+    state.selectedItem = null;
+    state.flags.cameraView = false;
+    updateBackground();
+    renderHotspots();
+    renderInventory();
+    sceneLayer.style.opacity = '1';
+    state.isTransitioning = false;
+
+    const newScene = gameData.scenes[sceneId];
+    if (newScene && typeof newScene.onEnter === 'function') {
+      newScene.onEnter();
+    }
+  }, 400);
+}
+
+function updateBackground() {
+  const scene = gameData.scenes[state.currentScene];
+  if (!scene) return;
+  if (state.flags.cameraView && scene.cameraBackground) {
+    sceneBg.style.background = scene.cameraBackground;
+    sceneLayer.classList.add('camera-view');
+    cameraExitBtn.classList.add('show');
+  } else {
+    sceneBg.style.background = scene.background;
+    sceneLayer.classList.remove('camera-view');
+    cameraExitBtn.classList.remove('show');
+  }
+}
+
+/* ============================================================
+ *  热点渲染
+ * ============================================================ */
+function renderHotspots() {
+  document.querySelectorAll('.hotspot').forEach(el => el.remove());
+
+  const scene = gameData.scenes[state.currentScene];
+  if (!scene) return;
+
+  updateBackground();
+
+  scene.hotspots.forEach(hs => {
+    if (hs.visible && !hs.visible()) return;
+
+    const rect = typeof hs.rect === 'function' ? hs.rect() : hs.rect;
+
+    const el = document.createElement('div');
+    el.className = 'hotspot';
+    if (state.selectedItem) el.classList.add('use-mode');
+    el.dataset.id = hs.id;
+    el.style.left   = rect.left + '%';
+    el.style.top    = rect.top + '%';
+    el.style.width  = rect.width + '%';
+    el.style.height = rect.height + '%';
+    el.textContent = hs.name;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.busy) return;
+
+      const beforeItem = state.selectedItem;
+      if (hs.onClick) hs.onClick();
+      if (state.selectedItem === beforeItem && beforeItem !== null) {
+        state.selectedItem = null;
+      }
+
+      renderInventory();
+      renderHotspots();
+    });
+
+    sceneLayer.appendChild(el);
+  });
+}
+
+/* ============================================================
+ *  物品栏
+ * ============================================================ */
+function renderInventory() {
+  inventoryEl.innerHTML = '';
+  state.inventory.forEach(itemId => {
+    const item = gameData.items[itemId];
+    if (!item) return;
+
+    const slot = document.createElement('div');
+    slot.className = 'item-slot' + (state.selectedItem === itemId ? ' selected' : '');
+    slot.dataset.id = itemId;
+    slot.title = item.name + '：' + (item.description || '');
+    slot.innerHTML = item.icon + `<span class="item-name">${item.name}</span>`;
+
+    slot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.busy) return;
+
+      if (item.onUse) { item.onUse(); return; }
+
+      if (state.selectedItem === itemId) {
+        state.selectedItem = null;
+      } else {
+        state.selectedItem = itemId;
+        showDialog(`选中了【${item.name}】，点击场景中的目标使用。`, 1500);
+      }
+      renderInventory();
+      renderHotspots();
+    });
+
+    inventoryEl.appendChild(slot);
+  });
+}
+
+function addItem(itemId) {
+  if (!state.inventory.includes(itemId)) {
+    state.inventory.push(itemId);
+    renderInventory();
+  }
+}
+
+function removeItem(itemId) {
+  const idx = state.inventory.indexOf(itemId);
+  if (idx >= 0) {
+    state.inventory.splice(idx, 1);
+    if (state.selectedItem === itemId) state.selectedItem = null;
+    renderInventory();
+  }
+}
+
+/* ============================================================
+ *  对话框 & 剧情
+ * ============================================================ */
+let dialogTimer = null;
+function showDialog(text, duration = 2800) {
+  dialogBox.textContent = text;
+  dialogBox.classList.add('show');
+  clearTimeout(dialogTimer);
+  if (duration > 0) {
+    dialogTimer = setTimeout(() => {
+      dialogBox.classList.remove('show');
+    }, duration);
+  }
+}
+
+function showStory(text, duration = 2500, onDone = null) {
+  state.busy = true;
+  storyText.textContent = text;
+  storyOverlay.classList.add('show');
+  setTimeout(() => {
+    storyOverlay.classList.remove('show');
+    state.busy = false;
+    if (onDone) onDone();
+  }, duration);
+}
+
+/* ============================================================
+ *  章节标题
+ * ============================================================ */
+function showChapter(n, onDone) {
+  const info = gameData.chapters[n];
+  if (!info) { if (onDone) onDone(); return; }
+
+  state.busy = true;
+  chapterTitle.textContent = info.title;
+  chapterSub.textContent = info.sub;
+  chapterOverlay.classList.add('show');
+  chapterOverlay.classList.remove('fade-out');
+
+  setTimeout(() => {
+    chapterOverlay.classList.add('fade-out');
+    setTimeout(() => {
+      chapterOverlay.classList.remove('show', 'fade-out');
+      state.busy = false;
+      if (onDone) onDone();
+    }, 800);
+  }, 2400);
+}
+
+/* ============================================================
+ *  密码锁
+ * ============================================================ */
+function showPasswordLock(title, correctPassword, onSuccess, options = {}) {
+  passwordTitle.textContent = title;
+  const isTime = options.type === 'time';
+
+  passwordSimple.style.display = isTime ? 'none' : 'block';
+  passwordTime.style.display   = isTime ? 'flex' : 'none';
+
+  if (isTime) {
+    timeHour.value = ''; timeMinute.value = '';
+    setTimeout(() => timeHour.focus(), 100);
+  } else {
+    passwordInput.value = '';
+    setTimeout(() => passwordInput.focus(), 100);
+  }
+
+  passwordCallback = () => {
+    let input;
+    if (isTime) {
+      const h = timeHour.value.trim();
+      const m = timeMinute.value.trim();
+      if (!h || !m) { showDialog('请填写完整的时间。'); return; }
+      input = h + ':' + m;
+    } else {
+      input = passwordInput.value.trim();
+    }
+
+    if (input === correctPassword) {
+      passwordModal.classList.remove('show');
+      passwordCallback = null;
+      onSuccess();
+    } else {
+      showDialog('密码错误……');
+      if (isTime) {
+        timeHour.value = ''; timeMinute.value = ''; timeHour.focus();
+      } else {
+        passwordInput.value = ''; passwordInput.focus();
+      }
+    }
+  };
+
+  passwordModal.classList.add('show');
+}
+
+document.getElementById('password-confirm').addEventListener('click', () => {
+  if (passwordCallback) passwordCallback();
+});
+document.getElementById('password-cancel').addEventListener('click', () => {
+  passwordModal.classList.remove('show');
+  passwordCallback = null;
+});
+passwordInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && passwordCallback) passwordCallback();
+});
+timeHour.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') timeMinute.focus();
+});
+timeMinute.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && passwordCallback) passwordCallback();
+});
+
+/* ============================================================
+ *  假人剧情
+ * ============================================================ */
+function playMannequinStory() {
+  state.busy = true;
+  state.selectedItem = null;
+  renderInventory();
+  renderHotspots();
+
+  showDialog('你把手扔出了窗外……\n它在黑暗里消失得无声无息。', 2200);
+  setTimeout(() => {
+    showStory('突然——\n\n身后传来咔、咔、咔的声响。\n\n假人动了起来。', 2800, () => {
+      setTimeout(() => {
+        showStory('「手……\n把手……\n还给我……」\n\n（声音不是从假人嘴里发出的）', 2800, () => {
+          setTimeout(() => {
+            showStory('你没有动。\n\n假人猛地扑向窗户，\n纵身一跃——', 2600, () => {
+              setTimeout(() => {
+                showStory('——却被窗框死死卡住。\n\n它挣扎了几下，\n然后不动了。', 3200, () => {
+                  state.flags.mannequinStuck = true;
+                  state.busy = false;
+                  renderHotspots();
+                  showDialog('假人卡在了窗户里。\n它的背……也许可以踩。', 3600);
+                });
+              }, 600);
+            });
+          }, 600);
+        });
+      }, 600);
+    });
+  }, 2200);
+}
+
+/* ============================================================
+ *  第六章追逐 → 第七章传送
+ * ============================================================ */
+function playChase() {
+  state.busy = true;
+  showStory('你从上方走廊冲下来——\n\n怪物就在你身后。\n\n206 的门锁死了。\n\n你拼命往祭坛跑——', 4800, () => {
+    state.busy = false;
+    changeScene('chaseScene');
+  });
+}
+
+/* ============================================================
+ *  相机退出
+ * ============================================================ */
+cameraExitBtn.addEventListener('click', () => {
+  if (!state.flags.cameraView) return;
+  state.flags.cameraView = false;
+  renderHotspots();
+  renderInventory();
+  showDialog('你放下了相机。');
+});
+
+/* ============================================================
+ *  点击空白
+ * ============================================================ */
+sceneLayer.addEventListener('click', () => {
+  if (state.busy) return;
+  if (state.selectedItem) {
+    state.selectedItem = null;
+    renderInventory();
+    renderHotspots();
+  }
+});
+
+/* ============================================================
+ *  初始化
+ * ============================================================ */
+function initGame() {
+  state.currentScene = gameData.startScene;
+  state.inventory = [];
+  state.flags = {};
+  state.selectedItem = null;
+  state.busy = false;
+
+  updateBackground();
+  renderHotspots();
+  renderInventory();
+
+  showChapter(1, () => {
+    const scene = gameData.scenes[state.currentScene];
+    if (scene && scene.onEnter) scene.onEnter();
+  });
+}
+
+initGame();
+
+window.gameState = state;
+window.gameData = gameData;
+window.changeScene = changeScene;
+</script>
+</body>
+</html>

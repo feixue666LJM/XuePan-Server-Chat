@@ -159,6 +159,19 @@ class HttpFrontend {
             // bypass bans when the header was absent (or when the protocol was raw
             // chat and had no HTTP headers at all).
             if (!allowBlockedIp(socket, peer == null ? "" : peer.getHostAddress())) return;
+
+            // SSL connections are already separated by the SSL listener. Do not
+            // run the raw TCP four-byte detector before TLS negotiation: doing so
+            // applies a one-second timeout to Cloudflare's handshake and can make
+            // the origin close a valid request, producing 520/521 at the edge.
+            if (socket instanceof SSLSocket) {
+                socket.setSoTimeout(10000);
+                BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
+                ((SSLSocket) socket).startHandshake();
+                handleHttpConnection(socket, input);
+                return;
+            }
+
             socket.setSoTimeout(PROTOCOL_DETECTION_TIMEOUT_MS);
             BufferedInputStream input = new BufferedInputStream(socket.getInputStream());
             input.mark(8);
@@ -265,7 +278,9 @@ class HttpFrontend {
                 && headers.getOrDefault("connection", "").toLowerCase(Locale.ROOT).contains("upgrade");
         if (!(socket instanceof SSLSocket)) {
             String host = headers.getOrDefault("host", "fangfang.dpdns.org");
-            String redirect = "https://" + host.split(":", 2)[0] + ":" + server.sslPort + target;
+            String hostName = host.split(":", 2)[0];
+            String portSuffix = server.sslPort == 443 ? "" : ":" + server.sslPort;
+            String redirect = "https://" + hostName + portSuffix + target;
             sendHttpRedirect(socket, redirect);
             return;
         }
@@ -335,7 +350,8 @@ class HttpFrontend {
             sendHttpResponse(socket, "200 OK", contentType, data);
             return;
         }
-        if (path.equals("/frontend-base.js") || path.equals("/frontend-events.js") || path.startsWith("/games/")) {
+        if (path.equals("/frontend-base.js") || path.equals("/frontend-events.js") || path.startsWith("/games/")
+                || path.startsWith("/images/")) {
             String resourcePath = path.substring(1);
             if (!isAllowedFrontendResourcePath(resourcePath)) {
                 sendHttpResponse(socket, "404 Not Found", "text/plain; charset=utf-8",
@@ -351,12 +367,14 @@ class HttpFrontend {
             sendHttpResponse(socket, "200 OK", frontendContentType(resourcePath), data);
             return;
         }
-        if (!"/".equals(path) && !"/index.html".equals(path)) {
+        if (!"/".equals(path) && !"/index.html".equals(path) && !"/chat".equals(path)
+                && !"/web-client.html".equals(path)) {
             sendHttpResponse(socket, "404 Not Found", "text/plain; charset=utf-8",
                     "Not found".getBytes(StandardCharsets.UTF_8));
             return;
         }
-        sendHttpResponse(socket, "200 OK", "text/html; charset=utf-8", loadWebClientPage());
+        byte[] page = "/".equals(path) ? loadInterfacePage() : loadWebClientPage();
+        sendHttpResponse(socket, "200 OK", "text/html; charset=utf-8", page);
     }
 
     byte[] loadVendorResource(String name) {
@@ -394,6 +412,9 @@ class HttpFrontend {
         if (resourcePath.endsWith(".js")) return "application/javascript; charset=utf-8";
         if (resourcePath.endsWith(".html")) return "text/html; charset=utf-8";
         if (resourcePath.endsWith(".css")) return "text/css; charset=utf-8";
+        if (resourcePath.endsWith(".png")) return "image/png";
+        if (resourcePath.endsWith(".jpg") || resourcePath.endsWith(".jpeg")) return "image/jpeg";
+        if (resourcePath.endsWith(".webp")) return "image/webp";
         return "application/octet-stream";
     }
 
@@ -681,7 +702,7 @@ class HttpFrontend {
                     + "<h1>网页端资源缺失</h1>").getBytes(StandardCharsets.UTF_8);
         }
         String html = new String(page, StandardCharsets.UTF_8);
-        String[] gamePages = { "games/snake/index.html", "games/red/index.html", "games/earth/index.html", "games/fps/index.html" };
+        String[] gamePages = { "games/snake/index.html", "games/red/index.html", "games/earth/index.html", "games/fps/index.html", "games/decrypt/index.html" };
         for (String gamePage : gamePages) {
             String marker = "<!-- GAME_INCLUDE: " + gamePage + " -->";
             byte[] fragment = loadFrontendResource(gamePage);
@@ -691,6 +712,22 @@ class HttpFrontend {
             html = html.replace(marker, replacement);
         }
         return html.getBytes(StandardCharsets.UTF_8);
+    }
+
+    byte[] loadInterfacePage() throws IOException {
+        byte[] page = null;
+        try (InputStream resource = ChatServer.class.getResourceAsStream("/interface.html")) {
+            if (resource != null) page = readAllBytes(resource, 4 * 1024 * 1024);
+        }
+        if (page == null) {
+            Path pagePath = server.config.resolveConfigPath("interface.html");
+            if (Files.exists(pagePath)) page = Files.readAllBytes(pagePath);
+        }
+        if (page == null) {
+            return ("<!doctype html><meta charset=\"utf-8\"><title>首页资源缺失</title>"
+                    + "<h1>首页资源缺失</h1>").getBytes(StandardCharsets.UTF_8);
+        }
+        return page;
     }
 
     byte[] readAllBytes(InputStream input, int limit) throws IOException {

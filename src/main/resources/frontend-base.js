@@ -1,6 +1,6 @@
     "use strict";
 
-    const DEFAULT_CLIENT_VERSION = "3.0.4";
+    const DEFAULT_CLIENT_VERSION = "3.0.5";
     const IMAGE_CHUNK_SIZE = 50000;
     const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
     const IDLE_LIMIT_MS = 60 * 60 * 1000;
@@ -32,6 +32,7 @@
       tBtnZ: $("tBtnZ"), tBtnG: $("tBtnG"), tBtnX: $("tBtnX"), tBtnJ: $("tBtnJ"), tBtnExit: $("tBtnExit"),
       gamesButton: $("gamesButton"), gamesCount: $("gamesCount"), gameList: $("gameList"),
       gamesBackButton: $("gamesBackButton"),
+      decryptScreen: $("decryptScreen"), decryptFrame: $("decryptFrame"), decryptBackButton: $("decryptBackButton"),
       webPanScreen: $("webPanScreen"), webPanFrame: $("webPanFrame"),
       gateDot: $("gateDot"), gateConnectionText: $("gateConnectionText"), challengeQuestion: $("challengeQuestion"),
       verifyForm: $("verifyForm"), verifyAnswer: $("verifyAnswer"), verifyButton: $("verifyButton"), verifyError: $("verifyError"),
@@ -108,6 +109,7 @@
       ui.clickScreen.hidden = name !== "click";
       ui.earthScreen.hidden = name !== "earth";
       ui.fpsScreen.hidden = name !== "fps";
+      ui.decryptScreen.hidden = name !== "decrypt";
     }
 
     function setGateStatus(text, mode) {
